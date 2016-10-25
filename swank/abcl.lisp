@@ -367,11 +367,115 @@
                                  (first (sys:frame-to-list frame)))))))
     (funcall debugger-loop-fn)))
 
+(defvar *aggressive-backtrace-trim* nil)
+
+;; *aggressive-backtrace-trim* causes nth-frame to get wrong index sometimes :-(
+
 (defun backtrace (start end)
   "A backtrace without initial SWANK frames."
   (let ((backtrace (sys:backtrace)))
-    (subseq (or (member *sldb-topframe* backtrace) backtrace)
-            start end)))
+    (if *aggressive-backtrace-trim*
+        (setq backtrace (remove-if 'noise-frame-p backtrace)))
+    (backtrace-trim-sldb-internals 
+     (subseq (or (member *sldb-topframe* backtrace) backtrace)
+             start end))))
+
+
+
+;;; maybe we shouldn't bother with the swank stuff - it doesn't show in the first backtrace because slime filters it
+;; There should be a jss-specific bit here. *'d frames are redundant for jss. + frames rewritted. Maybe rewrite the ++ jcall frame
+
+ ;;  0: (#<FUNCTION {46CB8F1B}> #<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>)
+ ;;  1: (APPLY #<FUNCTION {46CB8F1B}> (#<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>))
+ ;;  2: (SYSTEM::RUN-HOOK SYSTEM::*INVOKE-DEBUGGER-HOOK* #<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>)
+ ;;  3: (INVOKE-DEBUGGER #<JAVA-EXCEPTION {59308793}>)
+ ;;  4: org.armedbear.lisp.Lisp.error(Lisp.java:382)
+ ;;*  5: org.armedbear.lisp.Java.jcall(Java.java:914)
+ ;;*  6: org.armedbear.lisp.Java$pf_jcall.execute(Java.java:758)
+ ;;*  7: org.armedbear.lisp.Primitive.execute(Primitive.java:163)
+ ;;++  8: (JCALL "toString" 1 2 3 4)
+ ;;*  9: (APPLY #<JCALL {57BD13F}> "toString" 1 (2 3 4))
+ ;;* 10: (INVOKE-RESTARGS "toString" 1 (2 3 4) NIL)
+ ;;* 11: (#<FUNCTION (LAMBDA (#:G1344846 &REST #:G1344847)) {22AF59FB}> 1 2 3 4)
+ ;;+ 12: (SYSTEM::%EVAL ((LAMBDA (#:G1344846 &REST #:G1344847) (INVOKE-RESTARGS "toString" #:G1344846 #:G1344847 NIL)) 1 2 3 4))
+ ;;+ 13: (EVAL ((LAMBDA (#:G1344846 &REST #:G1344847) (INVOKE-RESTARGS "toString" #:G1344846 #:G1344847 NIL)) 1 2 3 4))
+
+;; and maybe this should all be done on the slime side (probably not because we've already rendered to string)
+(defun noise-frame-p (frame)
+  (and *aggressive-backtrace-trim*
+       (or
+        (and (typep frame 'sys::java-stack-frame )
+             (member (getf (sys::frame-to-list frame) :method) '("jstatic" "error" "execute") :test 'equal)
+             )
+        (and (typep frame 'sys::lisp-stack-frame)
+             (let ((frame (sys::frame-to-list frame)))
+               (or 
+                (and
+                 (symbolp (car frame))
+                 (or 
+                  (null '(member (package-name (symbol-package (car frame)))
+                          '("SWANK" "SWANK-REPL" "SWANK/BACKEND")
+                          :test 'equal))
+                  (and (eq (car frame) 'apply)
+                       (eq (second frame) #'java::jstatic))))
+                (and (functionp (car frame))
+                     (null (cdr frame))
+                     (null (FUNCTION-NAME (car frame))))
+                (and (eq (car frame) 'funcall)
+                     (functionp (second frame))
+                     (null (cddr frame))
+                     (null (FUNCTION-NAME (second frame))))))
+             ))))
+
+;; maybe we can avoid this by instead of doing unexpand-jss-in-frame, we look for the pattern at print time.
+(defstruct wrap-jss ()
+  (method))
+
+(defmethod print-object((o wrap-jss) stream)
+  (write-string "#\"" stream)
+  (write-string (wrap-jss-method o) stream)
+  (write-string "\"" stream))
+   
+(defun unexpand-jss-in-frame (frame)
+  (if *aggressive-backtrace-trim*
+      (loop for el in (sys::frame-to-list frame)
+            for method =  (matches-jss-call el)
+            if (stringp method) 
+              collect (list* (swank/abcl::make-wrap-jss :method method) (rest el))
+            else collect el)
+      (sys::frame-to-list frame)))
+
+(defun matches-jss-call (form)
+  (flet ((gensymp (s) (and (symbolp s) (null (symbol-package s))))
+         (invokep (s)  (and (symbolp s) (find-package "JSS") (eq s (intern "INVOKE-RESTARGS" "JSS")))))
+    (let ((method 
+            (swank/match::select-match 
+             form
+             (((LAMBDA ((#'gensymp a) &REST (#'gensymp b)) ((#'invokep fun) (#'stringp c) (#'gensymp d) (#'gensymp e) . args)) . args) '=> c)
+            (other nil))))
+      method)))
+
+(defun backtrace-trim-sldb-internals (backtrace)
+  (if (not *aggressive-backtrace-trim*) ;; ALANR::FIXME. nth-frame fails if we do this. er still fails. Presumably noise-p. Problem is that my messing with the backtrace somehow gets nth-frame called with the wrong index. 
+      backtrace
+      (let ((pos (position-if (lambda(f) 
+                                (and (typep f 'sys::lisp-stack-frame)
+                                     (let ((frame (sys::frame-to-list f)))
+                                       (eq (car frame) 'SYSTEM::RUN-HOOK)
+                                       (eq (second frame) 'SYSTEM::*INVOKE-DEBUGGER-HOOK*))))
+                              backtrace)))
+        (setq backtrace (if pos (subseq backtrace (1+ pos)) backtrace))
+        (let ((pos (position-if
+                    (lambda(f) 
+                      (and (typep f 'sys::lisp-stack-frame)
+                           (let ((frame (sys::frame-to-list f)))
+                             (and
+                              (eq (car frame) 'SYSTEM::%EVAL)
+                              (consp (second frame))
+                              (eq (car (second frame)) 'SWANK-REPL:LISTENER-EVAL)))))
+                    backtrace)))
+          (if pos (subseq backtrace 0 pos) backtrace)))))
+
 
 (defun nth-frame (index)
   (nth index (backtrace 0 nil)))
@@ -381,8 +485,11 @@
     (backtrace start end)))
 
 (defimplementation print-frame (frame stream)
-  (write-string (sys:frame-to-string frame)
-                stream))
+  (if (and *aggressive-backtrace-trim* 
+           (typep frame 'sys::lisp-stack-frame))
+      (prin1 (unexpand-jss-in-frame frame)  stream)
+      (write-string (sys:frame-to-string frame) stream)))
+
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403
@@ -419,10 +526,19 @@
   (elt (rest (java:jcall "toLispList" (nth-frame index))) id))
 
 
-#+nil
 (defimplementation disassemble-frame (index)
-  (disassemble (debugger:frame-function (nth-frame index))))
+  (write-string (cl-user::disassemble-function (frame-function (nth-frame index))) *standard-output*))
 
+(defun frame-function (frame)
+  (let ((list (sys::frame-to-list frame)))
+    (cond 
+      ((keywordp (car list))
+       (find (getf list :method) 
+             (#"getDeclaredMethods" (java::jclass (getf list :class)))
+             :key #"getName" :test 'equal))
+      (t (car list) ))))
+       
+;; ALANR:: ARGHH -- index isn't right
 (defimplementation frame-source-location (index)
   (let ((frame (nth-frame index)))
     (or (source-location (nth-frame index))
@@ -540,7 +656,26 @@
 
 (defgeneric source-location (object))
 
+(defun foo ()(funcall #'+ 1 nil))
+
+(defun implementation-source-location (arg)
+  (let ((function (cond ((functionp arg)
+                         arg)
+                        ((symbolp arg)
+                         (or (macro-function arg) (symbol-function arg))))))
+    (when (typep function 'generic-function)
+      (setf function (mop::funcallable-instance-function function)))
+    (and
+     (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.Primitive") (#"getClass" function))
+     (not (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.CompiledPrimitive") (#"getClass" function)))
+     (destructuring-bind (class local) (split-string (#"getName" (#"getClass" function)) "\\$")
+       (let ((file (subseq class (1+ (position #\. class  :from-end t)))))
+	 `(:location (:file ,(namestring (truename (make-pathname :directory (pathname-directory (truename "sys:src;")) :name file :type "java"))))
+		     (:line 0)
+		     (:snippet ,(format nil "class ~a" local))))))))
+
 (defmethod source-location ((symbol symbol))
+  (or (implementation-source-location symbol)
   (when (pathnamep (ext:source-pathname symbol))
     (let ((pos (ext:source-file-position symbol))
           (path (namestring (ext:source-pathname symbol))))
@@ -562,7 +697,7 @@
                 ,(if pos
                      (list :position (1+ pos))
                      (list :function-name (string symbol)))
-                (:align t)))))))
+                (:align t))))))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -647,7 +782,7 @@
              (cond ((not (pathname-type dir))
                     (let ((f (probe-file (merge-pathnames filename dir))))
                       (and f `(:file ,(namestring f)))))
-                   ((equal (pathname-type dir) "zip")
+                   ((member (pathname-type dir) '("zip" "jar") :test 'equal)
                     (try-zip dir))
                    (t (error "strange path element: ~s" path))))
            (try-zip (zip)

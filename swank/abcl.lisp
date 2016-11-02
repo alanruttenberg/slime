@@ -381,25 +381,6 @@
              start end))))
 
 
-
-;;; maybe we shouldn't bother with the swank stuff - it doesn't show in the first backtrace because slime filters it
-;; There should be a jss-specific bit here. *'d frames are redundant for jss. + frames rewritted. Maybe rewrite the ++ jcall frame
-
- ;;  0: (#<FUNCTION {46CB8F1B}> #<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>)
- ;;  1: (APPLY #<FUNCTION {46CB8F1B}> (#<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>))
- ;;  2: (SYSTEM::RUN-HOOK SYSTEM::*INVOKE-DEBUGGER-HOOK* #<JAVA-EXCEPTION {59308793}> #<FUNCTION {46CB8F1B}>)
- ;;  3: (INVOKE-DEBUGGER #<JAVA-EXCEPTION {59308793}>)
- ;;  4: org.armedbear.lisp.Lisp.error(Lisp.java:382)
- ;;*  5: org.armedbear.lisp.Java.jcall(Java.java:914)
- ;;*  6: org.armedbear.lisp.Java$pf_jcall.execute(Java.java:758)
- ;;*  7: org.armedbear.lisp.Primitive.execute(Primitive.java:163)
- ;;++  8: (JCALL "toString" 1 2 3 4)
- ;;*  9: (APPLY #<JCALL {57BD13F}> "toString" 1 (2 3 4))
- ;;* 10: (INVOKE-RESTARGS "toString" 1 (2 3 4) NIL)
- ;;* 11: (#<FUNCTION (LAMBDA (#:G1344846 &REST #:G1344847)) {22AF59FB}> 1 2 3 4)
- ;;+ 12: (SYSTEM::%EVAL ((LAMBDA (#:G1344846 &REST #:G1344847) (INVOKE-RESTARGS "toString" #:G1344846 #:G1344847 NIL)) 1 2 3 4))
- ;;+ 13: (EVAL ((LAMBDA (#:G1344846 &REST #:G1344847) (INVOKE-RESTARGS "toString" #:G1344846 #:G1344847 NIL)) 1 2 3 4))
-
 ;; and maybe this should all be done on the slime side (probably not because we've already rendered to string)
 (defun noise-frame-p (frame)
   (and *aggressive-backtrace-trim*
@@ -427,34 +408,6 @@
                      (null (FUNCTION-NAME (second frame))))))
              ))))
 
-;; maybe we can avoid this by instead of doing unexpand-jss-in-frame, we look for the pattern at print time.
-(defstruct wrap-jss ()
-  (method))
-
-(defmethod print-object((o wrap-jss) stream)
-  (write-string "#\"" stream)
-  (write-string (wrap-jss-method o) stream)
-  (write-string "\"" stream))
-   
-(defun unexpand-jss-in-frame (frame)
-  (if *aggressive-backtrace-trim*
-      (loop for el in (sys::frame-to-list frame)
-            for method =  (matches-jss-call el)
-            if (stringp method) 
-              collect (list* (swank/abcl::make-wrap-jss :method method) (rest el))
-            else collect el)
-      (sys::frame-to-list frame)))
-
-(defun matches-jss-call (form)
-  (flet ((gensymp (s) (and (symbolp s) (null (symbol-package s))))
-         (invokep (s)  (and (symbolp s) (find-package "JSS") (eq s (intern "INVOKE-RESTARGS" "JSS")))))
-    (let ((method 
-            (swank/match::select-match 
-             form
-             (((LAMBDA ((#'gensymp a) &REST (#'gensymp b)) ((#'invokep fun) (#'stringp c) (#'gensymp d) (#'gensymp e) . args)) . args) '=> c)
-            (other nil))))
-      method)))
-
 (defun backtrace-trim-sldb-internals (backtrace)
   (if (not *aggressive-backtrace-trim*) ;; ALANR::FIXME. nth-frame fails if we do this. er still fails. Presumably noise-p. Problem is that my messing with the backtrace somehow gets nth-frame called with the wrong index. 
       backtrace
@@ -472,7 +425,7 @@
                              (and
                               (eq (car frame) 'SYSTEM::%EVAL)
                               (consp (second frame))
-                              (eq (car (second frame)) 'SWANK-REPL:LISTENER-EVAL)))))
+                              (eq (car (second frame)) (intern "LISTENER-EVAL" "SWANK-REPL"))))))
                     backtrace)))
           (if pos (subseq backtrace 0 pos) backtrace)))))
 
@@ -484,10 +437,36 @@
   (let ((end (or end most-positive-fixnum)))
     (backtrace start end)))
 
+(defun jss-p ()
+  (and (member "JSS" *modules* :test 'string=) (intern "INVOKE-RESTARGS" "JSS")))
+          
+;; maybe we can avoid this by instead of doing unexpand-jss-in-frame, we look for the pattern at print time.
+(defun matches-jss-call (form)
+  (flet ((gensymp (s) (and (symbolp s) (null (symbol-package s))))
+         (invokep (s)  (and (symbolp s) (eq s (jss-p)))))
+    (let ((method 
+            (swank/match::select-match 
+             form
+             (((LAMBDA ((#'gensymp a) &REST (#'gensymp b)) 
+                 ((#'invokep fun) (#'stringp c) (#'gensymp d) (#'gensymp e) . args)) . args) '=> c)
+            (other nil))))
+      method)))
+
 (defimplementation print-frame (frame stream)
-  (if (and *aggressive-backtrace-trim* 
-           (typep frame 'sys::lisp-stack-frame))
-      (prin1 (unexpand-jss-in-frame frame)  stream)
+  (if (typep frame 'sys::lisp-stack-frame)
+      (if (not (jss-p))
+          (write-string (sys:frame-to-string frame) stream)
+          (progn
+            (write-char #\( stream) 
+            (loop for (el . rest) on (sys::frame-to-list frame)
+                  for method =  (swank/abcl::matches-jss-call el)
+                  do
+                     (cond (method 
+                            (format stream "(#~s ~{~s~^~})" method (cdr el)))
+                            (t
+                             (prin1 el stream)))
+                     (unless (null rest) (write-char #\space stream)))
+            (write-char #\) stream)))
       (write-string (sys:frame-to-string frame) stream)))
 
 
@@ -525,9 +504,8 @@
 (defimplementation frame-var-value (index id)
   (elt (rest (java:jcall "toLispList" (nth-frame index))) id))
 
-
 (defimplementation disassemble-frame (index)
-  (write-string (cl-user::disassemble-function (frame-function (nth-frame index))) *standard-output*))
+  (sys::disassemble (frame-function (nth-frame index))))
 
 (defun frame-function (frame)
   (let ((list (sys::frame-to-list frame)))
@@ -656,23 +634,41 @@
 
 (defgeneric source-location (object))
 
-(defun foo ()(funcall #'+ 1 nil))
-
+;; try to find some kind of source for internals
 (defun implementation-source-location (arg)
   (let ((function (cond ((functionp arg)
                          arg)
-                        ((symbolp arg)
+                        ((and  (symbolp arg) (fboundp arg)) 
                          (or (macro-function arg) (symbol-function arg))))))
     (when (typep function 'generic-function)
       (setf function (mop::funcallable-instance-function function)))
-    (and
-     (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.Primitive") (#"getClass" function))
-     (not (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.CompiledPrimitive") (#"getClass" function)))
-     (destructuring-bind (class local) (split-string (#"getName" (#"getClass" function)) "\\$")
-       (let ((file (subseq class (1+ (position #\. class  :from-end t)))))
-	 `(:location (:file ,(namestring (truename (make-pathname :directory (pathname-directory (truename "sys:src;")) :name file :type "java"))))
-		     (:line 0)
-		     (:snippet ,(format nil "class ~a" local))))))))
+    ;; functions are execute methods a class
+    (when (functionp function)
+    (let ((fclass (java:jcall "getClass" function)))
+      ;; CompiledPrimitive is user-defined, and will be found using source-location
+      (when (and (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.Primitive") fclass)
+                 (not (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.CompiledPrimitive") fclass)))
+       (let ((classname (java:jcall "getName" fclass)))
+         (destructuring-bind (class local) (if (find #\$ classname) (split-string classname "\\$") (list classname ""))
+           ;; look for java source
+           (let* ((partial-path   (substitute #\/ #\. class))
+                  (java-path (concatenate 'string partial-path ".java"))
+                  (found-in-source-path (find-file-in-path java-path *source-path*))) 
+               ;; snippet for finding the internal class within the file
+               (if found-in-source-path 
+                   `(:location ,found-in-source-path
+                               (:line 0)
+                               (:snippet ,(format nil "class ~a" local)))
+                   ;; if not, look for the class file, and hope that
+                   ;; emacs is configured to disassemble class entries in jars.
+                   ;; I use jdc.el(copy here: https://github.com/m0smith/dotfiles/blob/master/.emacs.d/site-lisp/jdc.el)
+                   ;; with jad (https://github.com/moparisthebest/jad)
+                   ;; Also (setq sys::*disassembler* "jad -a -p")
+                   (let ((class-in-source-path 
+                           (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
+                     ;; no snippet, since internal class is in its own file
+                     (if class-in-source-path `(:location ,class-in-source-path (:line 0) nil))
+                     ))))))))))
 
 (defmethod source-location ((symbol symbol))
   (or (implementation-source-location symbol)
@@ -760,6 +756,11 @@
 (defvar *source-path*
   (append (search-path-property "user.dir")
           (jdk-source-path)
+          ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
+          (list (sys::find-system-jar)
+                (sys::find-contrib-jar))
+          ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
+          ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
           ;;(list (truename "/scratch/abcl/src"))
           )
   "List of directories to search for source files.")
@@ -788,7 +789,7 @@
            (try-zip (zip)
              (let* ((zipfile-name (namestring (truename zip))))
                (and (zipfile-contains-p zipfile-name filename)
-                    `(:dir ,zipfile-name  ,filename)))))
+                    `(:zip ,zipfile-name  ,filename)))))
     (cond ((pathname-absolute-p filename) (probe-file filename))
           (t
            (loop for dir in path
@@ -799,11 +800,21 @@
   (let ((srcloc (source-location symbol)))
     (and srcloc `((,symbol ,srcloc)))))
 
+#+nil
+(defimplementation find-definitions (symbol)
+  (let ((sources (remove-duplicates (or (get symbol 'sys::source) (get symbol 'sys::%source-by-type)) :test 'equalp)))
+    (loop for (what file pos) in sources
+          collect
+          (list what `(:location (:file ,file) (:position ,pos) (:align t))))))
+
+
 #|
 Uncomment this if you have patched xref.lisp, as in
 http://article.gmane.org/gmane.lisp.slime.devel/2425
 Also, make sure that xref.lisp is loaded by modifying the armedbear
 part of *sysdep-pathnames* in swank.loader.lisp.
+;; alanr: (loop for file in  (directory  "/Users/lori/repos/abcl/src/org/armedbear/lisp/*.lisp") do (ignore-errors (pxref::XREF-FILE file nil)))
+;; Maybe https://mailman.common-lisp.net/pipermail/slime-devel/2004-August/002217.html
 
 ;;;; XREF
 (setq pxref:*handle-package-forms* '(cl:in-package))
@@ -822,7 +833,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 (defun xref-results (symbols)
   (let ((xrefs '()))
     (dolist (symbol symbols)
-      (push (list symbol (cadar (source-location symbol))) xrefs))
+      (push (list symbol (source-location symbol)) xrefs))
     xrefs))
 |#
 

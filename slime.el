@@ -4971,11 +4971,6 @@ argument is given, with CL:MACROEXPAND."
   :group 'slime-debugger
   :type 'integer)
 
-(defcustom sldb-initial-frames-limit 10
-  "Maximum number of frames to display initially."
-  :group 'slime-debugger
-  :type 'integer)
-
 
 ;;;;; Local variables in the debugger buffer
 
@@ -5199,20 +5194,8 @@ CONTS is a list of pending Emacs continuations."
       (setq sldb-backtrace-start-marker (point-marker))
       (save-excursion
         (if frames
-            (let ((pruned (sldb-prune-initial-frames frames)))
-              ;; alanr - need to coordinate this better. on swank side, hard coded to 20 *sldb-initial-frames*
-              ;; here this is further trimmed (in one case 9 disappear)
-              ;; if we want sldb-initial-frames-limit to work we need to set *sldb-initial-frames* to (say) 10 more than it.
-              ;; then we put in a "more" link if we get all of the initial frames (pre-pruning)
-              ;; pruning only shows the frames up to the first "swank" frame.
-              ;; So we show more if a) pruned < *sldb-initial-frames* 
-              ;;    OR 
-              (sldb-insert-frames (subseq pruned 0  (min (length pruned) sldb-initial-frames-limit))
-                                  (or (< (length pruned) (length frames)) 
-                                      (> (length pruned) sldb-initial-frames-limit)
-                                      (= (length frames) 20)))) ;; <- amount sent from other side, which should be more than sldb-initial-frames-limit
-          ;; PLUS there's the bug where some of the frames are printed twice
-              (insert "[No backtrace]")))
+            (sldb-insert-frames (sldb-prune-initial-frames frames) t)
+          (insert "[No backtrace]")))
       (run-hooks 'sldb-hook)
       (set-syntax-table lisp-mode-syntax-table))
     ;; FIXME: remove when dropping Emacs23 support
@@ -5241,8 +5224,7 @@ If LEVEL isn't the same as in the buffer reinitialize the buffer."
 
 (defun sldb-reinitialize (thread level)
   (slime-rex (thread level)
-      ;;; alanr this was 10. but i don't understand how I get here
-      (`(swank:debugger-info-for-emacs 0 ,sldb-initial-frames-limit)
+      ('(swank:debugger-info-for-emacs 0 10)
        nil thread)
     ((:ok result)
      (apply #'sldb-setup thread level result))))

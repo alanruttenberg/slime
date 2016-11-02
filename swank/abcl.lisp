@@ -795,17 +795,19 @@
            (loop for dir in path
                  if (try dir) return it)))))
 
+#+nil
 (defimplementation find-definitions (symbol)
   (ext:resolve symbol)
   (let ((srcloc (source-location symbol)))
     (and srcloc `((,symbol ,srcloc)))))
 
-#+nil
 (defimplementation find-definitions (symbol)
   (let ((sources (remove-duplicates (or (get symbol 'sys::source) (get symbol 'sys::%source-by-type)) :test 'equalp)))
-    (loop for (what file pos) in sources
+    (or (loop for (what file pos) in sources
           collect
-          (list what `(:location (:file ,file) (:position ,pos) (:align t))))))
+          (list what `(:location (:file ,file) (:position ,pos) (:align t))))
+        (let ((found (source-location symbol)))
+          (and found (list (list symbol (source-location symbol))))))))
 
 
 #|

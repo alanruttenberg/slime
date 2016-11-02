@@ -19,17 +19,6 @@
   (call-interactively 'dabbrev-expand))
     
 (defun slime-allsymbols-company--enable ()
-  ;; remove c-p-c hooks. It gets loaded because of a dependency
-  (progn
-    (remove-hook 'slime-completion-at-point-functions
-		 #'slime-c-p-c-completion-at-point)
-    (remove-hook 'slime-connected-hook 'slime-c-p-c-on-connect)
-    (when (featurep 'slime-repl)
-	`((define-key slime-mode-map "\C-c\C-s"
-	    ',(lookup-key slime-mode-map "\C-c\C-s"))
-	  (define-key slime-repl-mode-map "\C-c\C-s"
-	    ',(lookup-key slime-repl-mode-map "\C-c\C-s")))))
-  (add-hook 'slime-completion-at-point-functions #'dabbrev-expand-complete)
   (setq slime-completion-at-point-functions (subst 'dabbrev-expand-complete 'slime-simple-completion-at-point slime-completion-at-point-functions))
   (setq company-backends (remove 'company-slime company-backends))
   (dolist (h '(slime-mode-hook slime-repl-mode-hook sldb-mode-hook))

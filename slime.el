@@ -4971,6 +4971,7 @@ argument is given, with CL:MACROEXPAND."
   :group 'slime-debugger
   :type 'integer)
 
+;; until I understand this better, leave this at 10
 (defcustom sldb-initial-frames-limit 10
   "Maximum number of frames to display initially."
   :group 'slime-debugger
@@ -5208,7 +5209,7 @@ CONTS is a list of pending Emacs continuations."
               ;; So we show more if a) pruned < *sldb-initial-frames* 
               ;;    OR 
               (sldb-insert-frames (subseq pruned 0  (min (length pruned) sldb-initial-frames-limit))
-                                  (or (< (length pruned) (length frames)) 
+                                  '(or (< (length pruned) (length frames)) 
                                       (> (length pruned) sldb-initial-frames-limit)
                                       (= (length frames) 20)))) ;; <- amount sent from other side, which should be more than sldb-initial-frames-limit
           ;; PLUS there's the bug where some of the frames are printed twice

@@ -606,32 +606,6 @@
                                  (format nil "(~S () ~A)" 'lambda string)))))
         t))))
 
-#|
-;;;; Definition Finding
-
-(defun find-fspec-location (fspec type)
-  (let ((file (excl::fspec-pathname fspec type)))
-    (etypecase file
-      (pathname
-       (let ((start (scm:find-definition-in-file fspec type file)))
-         (make-location (list :file (namestring (truename file)))
-                        (if start
-                            (list :position (1+ start))
-                            (list :function-name (string fspec))))))
-      ((member :top-level)
-       (list :error (format nil "Defined at toplevel: ~A" fspec)))
-      (null
-       (list :error (format nil "Unkown source location for ~A" fspec))))))
-
-(defun fspec-definition-locations (fspec)
-  (let ((defs (excl::find-multiple-definitions fspec)))
-    (loop for (fspec type) in defs
-          collect (list fspec (find-fspec-location fspec type)))))
-
-(defimplementation find-definitions (symbol)
-  (fspec-definition-locations symbol))
-|#
-
 (defgeneric source-location (object))
 
 ;; try to find some kind of source for internals
@@ -879,6 +853,19 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
       (and defs
            (mapcar #'swank::xref>elisp (find-definitions symbol))))))
 
+;; for abcl source, check if it is still there, and if not, look in abcl jar instead
+(defun maybe-redirect-to-jar (path)
+  (setq path (namestring path))
+  (if (probe-file path)
+      path
+      (if (search "/org/armedbear/lisp" path :test 'string=)
+          (let ((jarpath (format nil "jar:file:~a!~a" (namestring (sys::find-system-jar)) 
+                                 (subseq path (search "/org/armedbear/lisp" path)))))
+            (if (probe-file jarpath) 
+                jarpath
+                path))
+          path)))
+
 (defimplementation find-definitions (symbol)
   (let ((sources nil)
         (implementation-variables nil)
@@ -903,25 +890,26 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
                        for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
                                               (ismethod (stringify-method-specs what))
                                               (t (list :position (1+ (or pos 0)))))
+                       for path2 = (maybe-redirect-to-jar path)
                        collect
                        (list (definition-specifier what)
-                             (if (ext:pathname-jar-p path)
+                             (if (ext:pathname-jar-p path2)
                                  `(:location
                                    ;; strip off "jar:file:" = 9 characters
-                                   (:zip ,@(split-string (subseq path 9) "!/"))
+                                   (:zip ,@(split-string (subseq path2 9) "!/"))
                                    ;; pos never seems right. Use function name.
                                    ,<position>
                                    (:align t)
                                    )
                                  ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
-                                 (if (eql 0 (search "emacs-buffer:" path))
+                                 (if (eql 0 (search "emacs-buffer:" path2))
                                      `(:location
-                                       (:buffer ,(subseq path  (load-time-value (length "emacs-buffer:"))))
+                                       (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
                                        ,<position>
                                        (:align t)
                                        )
                                      `(:location
-                                       (:file ,path)
+                                       (:file ,path2)
                                        ,<position>
                                        (:align t)))
                                  )))))))

@@ -681,19 +681,19 @@
             (:zip ,@(split-string (subseq path 9) "!/"))
             ;; pos never seems right. Use function name.
             (:function-name ,(string symbol))
-            (:align t))
+            (:align nil))
           ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
           (if (equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
               `(:location
                 (:buffer ,(pathname-name (ext:source-pathname symbol)))
                 (:function-name ,(string symbol))
-                (:align t))
+                (:align nil))
               `(:location
                 (:file ,path)
                 ,(if pos
                      (list :position (1+ pos))
                      (list :function-name (string symbol)))
-                (:align t))))))))
+                (:align nil))))))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -801,11 +801,95 @@
   (let ((srcloc (source-location symbol)))
     (and srcloc `((,symbol ,srcloc)))))
 
+(defparameter *definition-types*
+  '(:variable defvar
+    :constant defconstant
+    :type deftype
+    :symbol-macro define-symbol-macro
+    :macro defmacro
+    :compiler-macro define-compiler-macro
+    :function defun
+    :generic-function defgeneric
+    :method defmethod
+    :setf-expander define-setf-expander
+    :structure defstruct
+    :condition define-condition
+    :class defclass
+    :method-combination define-method-combination
+    :package defpackage
+    :transform :deftransform
+    :optimizer :defoptimizer
+    :vop :define-vop
+    :source-transform :define-source-transform
+    :ir1-convert :def-ir1-translator
+    :declaration declaim
+    :alien-type :define-alien-type)
+  "Map SB-INTROSPECT definition type names to Slime-friendly forms")
+
+(defun definition-specifier (type)
+  "Return a pretty specifier for NAME representing a definition of type TYPE."
+  (if (consp type)
+       `(,(getf *definition-types* (car type)) ,(second type) ,@(third type) ,@(cdddr type))
+       type))
+
+(defun stringify-method-specs (type)
+  "return a (:method ..) location for slime"
+  (let ((*print-case* :downcase))
+    (flet ((p (a) (princ-to-string a)))
+      (destructuring-bind (name qualifiers specializers) (cdr type)
+        `(,(car type) ,(p name) ,(mapcar #'p specializers) ,@(mapcar #'p qualifiers))))))
+
+(defun make-dspec (type name source-location)
+  (list* (definition-specifier type)
+         name))
+
+;; override swank's because the swank version decides too early that there isn't a definition, e.g. for a class
+(swank::defslimefun swank::find-definitions-for-emacs (name)
+  "Return a list ((DSPEC LOCATION) ...) of definitions for NAME.
+DSPEC is a string and LOCATION a source location. NAME is a string."
+  (let ((symbol (intern (string-upcase (subseq name (or (and (position #\: name :from-end t)
+                                                             (1+ (position #\: name :from-end t)))
+                                                        0))) 'keyword)))
+    (let ((defs (find-definitions symbol)))
+      (and defs
+           (mapcar #'swank::xref>elisp (find-definitions symbol))))))
+
 (defimplementation find-definitions (symbol)
-  (let ((sources (remove-duplicates (or (get symbol 'sys::source) (get symbol 'sys::%source-by-type)) :test 'equalp)))
-    (or (loop for (what file pos) in sources
-          collect
-          (list what `(:location (:file ,file) (:position ,pos) (:align t))))
+  (let ((sources 
+          (remove-duplicates
+           (loop for package in (list-all-packages)
+                 for sym = (find-symbol (string symbol) package)
+                 when sym
+                   append (get sym 'sys::source))
+           :test 'equalp)))
+    (or (loop for (what path pos) in sources
+              for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro)))
+              for ismethod = (and (consp what) (eq (car what) :method))
+              for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
+                                     (ismethod (stringify-method-specs what))
+                                     (t (list :position (1+ (or pos 0)))))
+              collect
+              (list (definition-specifier what)
+                    (if (ext:pathname-jar-p path)
+                        `(:location
+                          ;; strip off "jar:file:" = 9 characters
+                          (:zip ,@(split-string (subseq path 9) "!/"))
+                          ;; pos never seems right. Use function name.
+                          ,<position>
+                          (:align t)
+                          )
+                        ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
+                        (if (eql 0 (search "emacs-buffer:" path))
+                            `(:location
+                              (:buffer ,(subseq path  (load-time-value (length "emacs-buffer:"))))
+                              ,<position>
+                              (:align t)
+                              )
+                            `(:location
+                              (:file ,path)
+                              ,<position>
+                              (:align t)))
+                        )))
         (let ((found (source-location symbol)))
           (and found (list (list symbol (source-location symbol))))))))
 
@@ -987,6 +1071,10 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 
 (defimplementation quit-lisp ()
   (ext:exit))
+
+(defimplementation call-with-syntax-hooks (fn)
+  (let ((*print-case* :downcase))
+    (funcall fn)))
 ;;;
 #+#.(swank/backend:with-symbol 'package-local-nicknames 'ext)
 (defimplementation package-local-nicknames (package)

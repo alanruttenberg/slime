@@ -656,9 +656,9 @@
                        (found-in-source-path (find-file-in-path java-path *source-path*))) 
                   ;; snippet for finding the internal class within the file
                   (if found-in-source-path 
-                      `(:location ,found-in-source-path
+                      `(:function (:location ,found-in-source-path
                                   (:line 0)
-                                  (:snippet ,(format nil "class ~a" local)))
+                                  (:snippet ,(format nil "class ~a" local))))
                       ;; if not, look for the class file, and hope that
                       ;; emacs is configured to disassemble class entries in jars.
                       ;; I use jdc.el(copy here: https://github.com/m0smith/dotfiles/blob/master/.emacs.d/site-lisp/jdc.el)
@@ -667,7 +667,7 @@
                       (let ((class-in-source-path 
                               (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
                         ;; no snippet, since internal class is in its own file
-                        (if class-in-source-path `(:location ,class-in-source-path (:line 0) nil))
+                        (if class-in-source-path `(java-function (:location ,class-in-source-path (:line 0) nil)))
                         )))))
             )))))
 
@@ -690,15 +690,14 @@
                (jss::get-declared-field class internal-name2))))
 
 (defun maybe-implementation-variable (s)
-  (let* ((field (symbol-defined-in-java s))
-        (class (#"getName" (#"getDeclaringClass" field))))
-    (cl-user::print-db field class)
-    (when field
-      (let* ((partial-path (substitute #\/ #\. class))
-            (java-path (concatenate 'string partial-path ".java"))
-            (found-in-source-path (find-file-in-path java-path *source-path*)))
-        (if found-in-source-path
-            `((:variable (:location ,found-in-source-path (:line 0) (:snippet ,(format nil  "~s" (string s)))))))))))
+  (let ((field (symbol-defined-in-java s)))
+    (and field
+         (let ((class (#"getName" (#"getDeclaringClass" field))))
+           (let* ((partial-path (substitute #\/ #\. class))
+                  (java-path (concatenate 'string partial-path ".java"))
+                  (found-in-source-path (find-file-in-path java-path *source-path*)))
+             (if found-in-source-path
+                 `(symbol (:location ,found-in-source-path (:line 0) (:snippet ,(format nil  "~s" (string s)))))))))))
 
 (defmethod source-location ((symbol symbol))
   (or (implementation-source-location symbol)
@@ -881,14 +880,22 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
            (mapcar #'swank::xref>elisp (find-definitions symbol))))))
 
 (defimplementation find-definitions (symbol)
-  (let ((sources
-          (remove-duplicates
-           (loop for package in (list-all-packages)
-                 for sym = (find-symbol (string symbol) package)
-                 when sym
-                   append (get sym 'sys::source))
-           :test 'equalp)))
-    (append  (maybe-implementation-variable symbol)
+  (let ((sources nil)
+        (implementation-variables nil)
+        (implementation-functions nil))
+    (loop for package in (list-all-packages)
+          for sym = (find-symbol (string symbol) package)
+          when (and sym (equal (symbol-package sym) package))
+            do
+               (let ((source (get sym 'sys::source))
+                     (i-var  (maybe-implementation-variable sym))
+                     (i-fun  (implementation-source-location sym)))
+                 (when source  (setq sources (append sources (get sym 'sys::source))))
+                 (when i-var (push i-var implementation-variables))
+                 (when i-fun (push i-fun implementation-functions))))
+    (setq sources (remove-duplicates sources :test 'equalp))
+    (append  (remove-duplicates implementation-variables :test 'equalp)
+             (remove-duplicates implementation-functions :test 'equalp)
              (or (loop for (what path pos) in sources
                        ;; all of these are (defxxx forms, which is what :function locations look for in slime
                        for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition)))
@@ -917,9 +924,7 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
                                        (:file ,path)
                                        ,<position>
                                        (:align t)))
-                                 )))
-                 (let ((found (source-location symbol)))
-                   (and found (list (list symbol (source-location symbol)))))))))
+                                 )))))))
 
 
 #|

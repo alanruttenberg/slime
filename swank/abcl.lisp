@@ -612,38 +612,37 @@
 (defun implementation-source-location (arg)
   (let ((function (cond ((functionp arg)
                          arg)
-                        ((and  (symbolp arg) (fboundp arg)) 
-                         (or (macro-function arg) (symbol-function arg))))))
+                        ((and (symbolp arg) (fboundp arg)) 
+                         (or (symbol-function arg) (macro-function arg))))))
     (when (typep function 'generic-function)
       (setf function (mop::funcallable-instance-function function)))
-    ;; functions are execute methods a class
-    (when (functionp function)
+    ;; functions are execute methods of class
+    (when (or (functionp function) (special-operator-p arg))
       (let ((fclass (java:jcall "getClass" function)))
-        ;; CompiledPrimitive is user-defined, and will be found using source-location
-        (if (and (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.Primitive") fclass)
-                 (not (java::jclass-superclass-p (java::jclass "org.armedbear.lisp.CompiledPrimitive") fclass)))
-            (let ((classname (java:jcall "getName" fclass)))
-              (destructuring-bind (class local) (if (find #\$ classname) (split-string classname "\\$") (list classname ""))
-                ;; look for java source
-                (let* ((partial-path   (substitute #\/ #\. class))
-                       (java-path (concatenate 'string partial-path ".java"))
-                       (found-in-source-path (find-file-in-path java-path *source-path*))) 
-                  ;; snippet for finding the internal class within the file
-                  (if found-in-source-path 
-                      `(:function (:location ,found-in-source-path
-                                  (:line 0)
-                                  (:snippet ,(format nil "class ~a" local))))
-                      ;; if not, look for the class file, and hope that
-                      ;; emacs is configured to disassemble class entries in jars.
-                      ;; I use jdc.el(copy here: https://github.com/m0smith/dotfiles/blob/master/.emacs.d/site-lisp/jdc.el)
-                      ;; with jad (https://github.com/moparisthebest/jad)
-                      ;; Also (setq sys::*disassembler* "jad -a -p")
-                      (let ((class-in-source-path 
-                              (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
-                        ;; no snippet, since internal class is in its own file
-                        (if class-in-source-path `(java-function (:location ,class-in-source-path (:line 0) nil)))
-                        )))))
-            )))))
+        (let ((classname (java:jcall "getName" fclass)))
+          (destructuring-bind (class local) (if (find #\$ classname)
+                                                (split-string classname "\\$")
+                                                (list classname (#"replaceFirst" classname "([^.]*\\.)*" "")))
+            ;; look for java source
+            (let* ((partial-path   (substitute #\/ #\. class))
+                   (java-path (concatenate 'string partial-path ".java"))
+                   (found-in-source-path (find-file-in-path java-path *source-path*))) 
+              ;; snippet for finding the internal class within the file
+              (if found-in-source-path 
+                  `(,(format nil "(primitive ~a)" local)
+                    (:location ,found-in-source-path
+                               (:line 0)
+                               (:snippet ,(format nil "class ~a" local))))
+                  ;; if not, look for the class file, and hope that
+                  ;; emacs is configured to disassemble class entries in jars.
+                  ;; I use jdc.el(copy here: https://github.com/m0smith/dotfiles/blob/master/.emacs.d/site-lisp/jdc.el)
+                  ;; with jad (https://github.com/moparisthebest/jad)
+                  ;; Also (setq sys::*disassembler* "jad -a -p")
+                  (let ((class-in-source-path 
+                          (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
+                    ;; no snippet, since internal class is in its own file
+                    (if class-in-source-path `(:primitive (:location ,class-in-source-path (:line 0) nil)))
+                    )))))))))
 
 (defun symbol-defined-in-java (symbol)
   (loop  with internal-name1 = (#"replaceAll" (#"replaceAll" (string symbol) "\\*" "") "-" "_")
@@ -757,15 +756,16 @@
           (search-path-property "sun.boot.class.path")))
 
 (defvar *source-path*
-  (append (search-path-property "user.dir")
-          (jdk-source-path)
-          ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
-          (list (sys::find-system-jar)
-                (sys::find-contrib-jar))
-          ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
-          ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
-          ;;(list (truename "/scratch/abcl/src"))
-          )
+  (remove nil 
+          (append (search-path-property "user.dir")
+                  (jdk-source-path)
+                  ;; include lib jar files. contrib has lisp code. Would be good to build abcl.jar with source code as well
+                  (list (sys::find-system-jar)
+                        (sys::find-contrib-jar))
+                  ;; you should tell slime where the abcl sources are. In .swank.lisp I have:
+                  ;; (push (probe-file "/Users/alanr/repos/abcl/src/") *SOURCE-PATH*)
+                  ;;(list (truename "/scratch/abcl/src"))
+                  ))
   "List of directories to search for source files.")
 
 (defun zipfile-contains-p (zipfile-name entry-name)
@@ -831,9 +831,10 @@
 
 (defun definition-specifier (type)
   "Return a pretty specifier for NAME representing a definition of type TYPE."
-  (if (consp type)
+  (or (if (and (consp type) (getf *definition-types* (car type)))
        `(,(getf *definition-types* (car type)) ,(second type) ,@(third type) ,@(cdddr type))
-       (getf *definition-types* type)))
+       (getf *definition-types* type))
+      type))
 
 (defun stringify-method-specs (type)
   "return a (:method ..) location for slime"
@@ -842,16 +843,17 @@
       (destructuring-bind (name qualifiers specializers) (cdr type)
         `(,(car type) ,(p name) ,(mapcar #'p specializers) ,@(mapcar #'p qualifiers))))))
 
-;; override swank's because the swank version decides too early that there isn't a definition, e.g. for a class
-(swank::defslimefun swank::find-definitions-for-emacs (name)
-  "Return a list ((DSPEC LOCATION) ...) of definitions for NAME.
+#+nil 
+  ;; override swank's because the swank version decides too early that there isn't a definition, e.g. for a class
+  (defslimefun swank::find-definitions-for-emacs (name)
+    "Return a list ((DSPEC LOCATION) ...) of definitions for NAME.
 DSPEC is a string and LOCATION a source location. NAME is a string."
-  (let ((symbol (intern (string-upcase (subseq name (or (and (position #\: name :from-end t)
-                                                             (1+ (position #\: name :from-end t)))
-                                                        0))) 'keyword)))
-    (let ((defs (find-definitions symbol)))
-      (and defs
-           (mapcar #'swank::xref>elisp (find-definitions symbol))))))
+    (let ((symbol (intern (string-upcase (subseq name (or (and (position #\: name :from-end t)
+                                                               (1+ (position #\: name :from-end t)))
+                                                          0))) 'keyword)))
+      (let ((defs (find-definitions symbol)))
+        (and defs
+             (mapcar #'swank::xref>elisp (find-definitions symbol))))))
 
 ;; for abcl source, check if it is still there, and if not, look in abcl jar instead
 (defun maybe-redirect-to-jar (path)
@@ -874,6 +876,8 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
           for sym = (find-symbol (string symbol) package)
           when (and sym (equal (symbol-package sym) package))
             do
+               (when (sys::autoloadp symbol)
+                 (sys::resolve symbol))
                (let ((source (get sym 'sys::source))
                      (i-var  (maybe-implementation-variable sym))
                      (i-fun  (implementation-source-location sym)))
@@ -890,7 +894,9 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
                        for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
                                               (ismethod (stringify-method-specs what))
                                               (t (list :position (1+ (or pos 0)))))
-                       for path2 = (maybe-redirect-to-jar path)
+                       for path2 = (if (eq path :top-level)
+                                       "emacs-buffer:*slime-repl lsw*"
+                                       (maybe-redirect-to-jar path))
                        collect
                        (list (definition-specifier what)
                              (if (ext:pathname-jar-p path2)

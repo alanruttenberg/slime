@@ -16,19 +16,10 @@
 	    symbols)))
 
 (defslimefun allsymbol-completions (string package-name)
-  (let ((results nil))
-    #+abcl
-    ;; 3x faster
-    (locally (declare (optimize (speed 3) (safety 0)))
-      (let ((pattern (#"compile" 'java.util.regex.pattern (concatenate 'string "(?i)^" (#"quote" 'java.util.regex.Pattern string) ".*"))))
-	(jss::with-constant-signature ((matcher "matcher") (matches "matches"))
-	  (do-all-symbols (s )
-	    (when (matches (matcher pattern (string s)))
-	      (push s results))))))
-    #-abcl
-    (do-all-symbols (s)
-      (when (eql (search string (string s) :test 'char-equal) 0)
-	(push s results)))
+  (let ((results 
+	  #+:abcl (abcl-find-candidates string package-name)
+	  #-:abcl (not-abcl-find-candidates string package-name)
+	  ))
     (let ((default-package (find-package package-name)))
       (flet ((relative-importance (a b)
 	       (declare (ignore b))
@@ -37,7 +28,26 @@
 		    (fboundp a)
 		    (not (keywordp a)))))
 	(list (format-allsymbols-completion-set 
-	 (sort results #'relative-importance)
-	  package-name
-	  ) string)))))
+	       (sort results #'relative-importance)
+	       package-name)
+	      string)))))
 
+#+:abcl
+(defun abcl-find-candidates (string package-name &results)
+  (declare (optimize (speed 3) (safety 0)))
+  (let ((pattern (jstatic "compile" 'java.util.regex.pattern (concatenate 'string "(?i)^" (jstatic "quote" 'java.util.regex.Pattern string) ".*"))))
+    (jss::with-constant-signature ((matcher "matcher") (matches "matches"))
+      (do-all-symbols (s )
+	(when (matches (matcher pattern (string s)))
+	  (push s results))))
+    resulte))
+
+#-:abcl
+(defun not-abcl-find-candidates (string package-name &aux results)
+  (declare (ignore package-name))
+  (do-all-symbols (s)
+    (when (eql (search string (string s) :test 'char-equal) 0)
+      (push s results)))
+  results)
+
+(provide 'slime-allsymbols-company)

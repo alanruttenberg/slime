@@ -33,14 +33,14 @@
 	      string)))))
 
 #+:abcl
-(defun abcl-find-candidates (string package-name &results)
+(defun abcl-find-candidates (string package-name &aux results)
   (declare (optimize (speed 3) (safety 0)))
-  (let ((pattern (jstatic "compile" 'java.util.regex.pattern (concatenate 'string "(?i)^" (jstatic "quote" 'java.util.regex.Pattern string) ".*"))))
+  (let ((pattern (java:jstatic "compile" (java:jclass "java.util.regex.Pattern") (concatenate 'string "(?i)^" (java:jstatic "quote" (java:jclass "java.util.regex.Pattern") string) ".*"))))
     (jss::with-constant-signature ((matcher "matcher") (matches "matches"))
       (do-all-symbols (s )
 	(when (matches (matcher pattern (string s)))
 	  (push s results))))
-    resulte))
+    results))
 
 #-:abcl
 (defun not-abcl-find-candidates (string package-name &aux results)

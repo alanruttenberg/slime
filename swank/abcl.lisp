@@ -506,10 +506,8 @@
       (let ((*buffer-name* buffer)
             (*buffer-start-position* position)
             (*buffer-string* string))
-        (let ((sys::*source* (make-pathname :device "emacs-buffer" :name *buffer-name*))
-              (sys::*source-position* *buffer-start-position*))
-          (funcall (compile nil (read-from-string
-                                 (format nil "(~S () ~A)" 'lambda string)))))
+        (funcall (compile nil (read-from-string
+                               (format nil "(~S () ~A)" 'lambda string))))
         t))))
 
 #|
@@ -542,27 +540,13 @@
 
 (defmethod source-location ((symbol symbol))
   (when (pathnamep (ext:source-pathname symbol))
-    (let ((pos (ext:source-file-position symbol))
-          (path (namestring (ext:source-pathname symbol))))
-      (if (ext:pathname-jar-p path)
-          `(:location
-            ;; strip off "jar:file:" = 9 characters
-            (:zip ,@(split-string path "!/"))
-            ;; pos never seems right. Use function name.
-            (:function-name ,(string symbol))
-            (:align t))
-          ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
-          (if (equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-              `(:location
-                (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                (:function-name ,(string symbol))
-                (:align t))
-              `(:location
-                (:file ,path)
-                ,(if pos
-                     (list :position (1+ pos))
-                     (list :function-name (string symbol)))
-                (:align t)))))))
+    (let ((pos (ext:source-file-position symbol)))
+      `(:location
+        (:file ,(namestring (ext:source-pathname symbol)))
+        ,(if pos
+             (list :position (1+ pos))
+             (list :function-name (string symbol)))
+        (:align t)))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)

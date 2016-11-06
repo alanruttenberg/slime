@@ -66,9 +66,12 @@
   "Mark the beginning of a presentation with the given ID.
 TARGET can be nil (regular process output) or :repl-result."
   (setf (gethash id slime-presentation-start-to-point)
-        ;; We use markers because text can also be inserted before this presentation.
-        ;; (Output arrives while we are writing presentations within REPL results.)
-        (copy-marker (slime-output-target-marker target) nil)))
+	;; We use markers because text can also be inserted before this presentation.
+	;; (Output arrives while we are writing presentations within REPL results.)
+	;; alanr: This doesn't seem to work for other than results, so use the position unless we are recording for the repl results
+	(if (eq target :repl-result)
+	    (copy-marker (slime-output-target-marker target))
+	  (marker-position (slime-output-target-marker target)))))
 
 (defun slime-mark-presentation-start-handler (process string)
   (if (and string (string-match "<\\([-0-9]+\\)" string))

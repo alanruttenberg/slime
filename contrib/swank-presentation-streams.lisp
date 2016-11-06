@@ -319,7 +319,14 @@ says that I am starting to print an object with this id. The second says I am fi
     (excl:fwrap 'excl::pathname-printer
 		'print-pathname-present 'presenting-pathname-wrapper)))
 
-#-(or allegro sbcl cmu openmcl)
+#+abcl
+(progn
+  (defvar *original-%print-unreadable-object* (symbol-function 'sys::%print-unreadable-object))
+  (defun monkey-patch-stream-printing ()
+    (defun sys::%print-unreadable-object (object stream type identity body)
+      (presenting-object object stream (funcall *original-%print-unreadable-object* object stream type identity body)))))
+
+#-(or allegro sbcl cmu openmcl abcl)
 (defun monkey-patch-stream-printing ()
   (values))
 

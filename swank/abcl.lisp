@@ -623,6 +623,7 @@
           (destructuring-bind (class local) (if (find #\$ classname)
                                                 (split-string classname "\\$")
                                                 (list classname (#"replaceFirst" classname "([^.]*\\.)*" "")))
+            (unless (member local '("MacroObject" "CompiledClosure" "Closure") :test 'equal)
             ;; look for java source
             (let* ((partial-path   (substitute #\/ #\. class))
                    (java-path (concatenate 'string partial-path ".java"))
@@ -642,7 +643,7 @@
                           (find-file-in-path (concatenate 'string partial-path ".class") *source-path*)))
                     ;; no snippet, since internal class is in its own file
                     (if class-in-source-path `(:primitive (:location ,class-in-source-path (:line 0) nil)))
-                    )))))))))
+                    ))))))))))
 
 (defun symbol-defined-in-java (symbol)
   (loop  with internal-name1 = (#"replaceAll" (#"replaceAll" (string symbol) "\\*" "") "-" "_")
@@ -885,40 +886,41 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
                  (when i-var (push i-var implementation-variables))
                  (when i-fun (push i-fun implementation-functions))))
     (setq sources (remove-duplicates sources :test 'equalp))
-    (append  (remove-duplicates implementation-variables :test 'equalp)
-             (remove-duplicates implementation-functions :test 'equalp)
-             (or (loop for (what path pos) in sources
-                       ;; all of these are (defxxx forms, which is what :function locations look for in slime
-                       for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition)))
-                       for ismethod = (and (consp what) (eq (car what) :method))
-                       for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
-                                              (ismethod (stringify-method-specs what))
-                                              (t (list :position (1+ (or pos 0)))))
-                       for path2 = (if (eq path :top-level)
-                                       "emacs-buffer:*slime-repl lsw*"
-                                       (maybe-redirect-to-jar path))
-                       collect
-                       (list (definition-specifier what)
-                             (if (ext:pathname-jar-p path2)
-                                 `(:location
-                                   ;; strip off "jar:file:" = 9 characters
-                                   (:zip ,@(split-string (subseq path2 9) "!/"))
-                                   ;; pos never seems right. Use function name.
-                                   ,<position>
-                                   (:align t)
-                                   )
-                                 ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
-                                 (if (eql 0 (search "emacs-buffer:" path2))
-                                     `(:location
-                                       (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
-                                       ,<position>
-                                       (:align t)
-                                       )
-                                     `(:location
-                                       (:file ,path2)
-                                       ,<position>
-                                       (:align t)))
-                                 )))))))
+    (append (remove-duplicates implementation-functions :test 'equalp)
+
+            (or (loop for (what path pos) in sources
+                      ;; all of these are (defxxx forms, which is what :function locations look for in slime
+                      for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition)))
+                      for ismethod = (and (consp what) (eq (car what) :method))
+                      for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
+                                             (ismethod (stringify-method-specs what))
+                                             (t (list :position (1+ (or pos 0)))))
+                      for path2 = (if (eq path :top-level)
+                                      "emacs-buffer:*slime-repl lsw*"
+                                      (maybe-redirect-to-jar path))
+                      collect
+                      (list (definition-specifier what)
+                            (if (ext:pathname-jar-p path2)
+                                `(:location
+                                  ;; strip off "jar:file:" = 9 characters
+                                  (:zip ,@(split-string (subseq path2 9) "!/"))
+                                  ;; pos never seems right. Use function name.
+                                  ,<position>
+                                  (:align t)
+                                  )
+                                ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
+                                (if (eql 0 (search "emacs-buffer:" path2))
+                                    `(:location
+                                      (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
+                                      ,<position>
+                                      (:align t)
+                                      )
+                                    `(:location
+                                      (:file ,path2)
+                                      ,<position>
+                                      (:align t)))
+                                ))))
+            (remove-duplicates implementation-variables :test 'equalp))))
 
 
 #|

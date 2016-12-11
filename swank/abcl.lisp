@@ -888,7 +888,7 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
     (setq sources (remove-duplicates sources :test 'equalp))
     (append (remove-duplicates implementation-functions :test 'equalp)
 
-            (or (loop for (what path pos) in sources
+           (loop for (what path pos) in sources
                       ;; all of these are (defxxx forms, which is what :function locations look for in slime
                       for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition)))
                       for ismethod = (and (consp what) (eq (car what) :method))
@@ -919,8 +919,8 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
                                       (:file ,path2)
                                       ,<position>
                                       (:align t)))
-                                ))))
-            (remove-duplicates implementation-variables :test 'equalp))))
+                                )))
+           (remove-duplicates implementation-variables :test 'equalp))))
 
 
 #|

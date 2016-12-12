@@ -599,11 +599,11 @@
     (handler-bind ((warning #'handle-compiler-warning))
       (let ((*buffer-name* buffer)
             (*buffer-start-position* position)
-            (*buffer-string* string))
-        (let ((sys::*source* (make-pathname :device "emacs-buffer" :name *buffer-name*))
-              (sys::*source-position* *buffer-start-position*))
-          (funcall (compile nil (read-from-string
-                                 (format nil "(~S () ~A)" 'lambda string)))))
+            (*buffer-string* string)
+            (sys::*source* (make-pathname :device "emacs-buffer" :name buffer))
+            (sys::*source-position* position))
+        (funcall (compile nil (read-from-string
+                               (format nil "(~S () ~A)" 'lambda string))))
         t))))
 
 (defgeneric source-location (object))
@@ -675,28 +675,30 @@
 
 (defmethod source-location ((symbol symbol))
   (or (implementation-source-location symbol)
-  (when (pathnamep (ext:source-pathname symbol))
-    (let ((pos (ext:source-file-position symbol))
-          (path (namestring (ext:source-pathname symbol))))
-      (if (ext:pathname-jar-p path)
-          `(:location
-            ;; strip off "jar:file:" = 9 characters
-            (:zip ,@(split-string (subseq path 9) "!/"))
-            ;; pos never seems right. Use function name.
-            (:function-name ,(string symbol))
-            (:align nil))
-          ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
-          (if (equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-              `(:location
-                (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                (:function-name ,(string symbol))
-                (:align nil))
-              `(:location
-                (:file ,path)
-                ,(if pos
-                     (list :position (1+ pos))
-                     (list :function-name (string symbol)))
-                (:align nil))))))))
+      (when (pathnamep (ext:source-pathname symbol))
+        (let ((pos (ext:source-file-position symbol))
+              (path (namestring (ext:source-pathname symbol))))
+          (cond ((ext:pathname-jar-p path)
+                 `(:location
+                   ;; strip off "jar:file:" = 9 characters
+                   (:zip ,@(split-string (subseq path 9) "!/"))
+                   ;; pos never seems right. Use function name.
+                   (:function-name ,(string symbol))
+                   (:align t)))
+                ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
+                 ;; conspire with swank-compile-string to keep the buffer
+                 ;; name in a pathname whose device is "emacs-buffer".
+                 `(:location
+                   (:buffer ,(pathname-name (ext:source-pathname symbol)))
+                   (:function-name ,(string symbol))
+                   (:align t)))
+                (t
+                 `(:location
+                   (:file ,path)
+                   ,(if pos
+                        (list :position (1+ pos))
+                        (list :function-name (string symbol)))
+                   (:align t))))))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -961,7 +963,16 @@ part of *sysdep-pathnames* in swank.loader.lisp.
               :appending (label-value-line label value))
            (list "No inspectable parts, dumping output of CL:DESCRIBE:"
                  '(:newline)
-                  (with-output-to-string (desc) (describe o desc)))))))
+                 (with-output-to-string (desc) (describe o desc)))))))
+
+(defmethod emacs-inspect ((o java::java-exception))
+  (append (call-next-method)
+          (list '(:newline) "Stack trace"
+                      '(:newline)
+                      (let ((w (java::jnew "java.io.StringWriter"))) 
+                        (java::jcall "printStackTrace" (java::java-exception-cause o) (java::jnew "java.io.PrintWriter" w))
+                        (java::jcall "toString" w)))
+          ))
 
 (defmethod emacs-inspect ((slot mop::slot-definition))
   `("Name: "
@@ -1001,22 +1012,76 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 ;;; non-computationally expensive operation this isn't always the
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table))
+
 (defmethod emacs-inspect ((o java:java-object))
-  (let ((to-string (lambda ()
-                     (handler-case
-                         (setf (gethash o *to-string-hashtable*)
-                               (java:jcall "toString" o))
-                       (t (e)
-                         (setf (gethash o *to-string-hashtable*)
-                               (format nil
-                                       "Could not invoke toString(): ~A"
-                                       e)))))))
-    (append
-     (if (gethash o *to-string-hashtable*)
-         (label-value-line "toString()" (gethash o *to-string-hashtable*))
-         `((:action "[compute toString()]" ,to-string) (:newline)))
-     (loop :for (label . value) :in (sys:inspected-parts o)
-      :appending (label-value-line label value)))))
+  (if (java::jinstance-of-p o (java::jclass "java.lang.Class"))
+      (emacs-inspect-java-class o)
+      (let ((to-string (lambda ()
+                         (handler-case
+                             (setf (gethash o *to-string-hashtable*)
+                                   (java:jcall "toString" o))
+                           (t (e)
+                             (setf (gethash o *to-string-hashtable*)
+                                   (format nil
+                                           "Could not invoke toString(): ~A"
+                                           e)))))))
+        (append
+         (if (gethash o *to-string-hashtable*)
+             (label-value-line "toString()" (gethash o *to-string-hashtable*))
+             `((:action "[compute toString()]" ,to-string) (:newline)))
+         (loop :for (label . value) :in (sys:inspected-parts o)
+               :appending (label-value-line label value))
+         ))))
+
+(defmethod emacs-inspect ((slot mop::slot-definition))
+  `("Name: "
+    (:value ,(mop:slot-definition-name slot))
+    (:newline)
+    "Documentation:" (:newline)
+    ,@(when (slot-definition-documentation slot)
+            `((:value ,(slot-definition-documentation slot)) (:newline)))
+    "Initialization:" (:newline)
+    "  Args: " (:value ,(mop:slot-definition-initargs slot)) (:newline)
+    "  Form: "  ,(if (mop:slot-definition-initfunction slot)
+                     `(:value ,(mop:slot-definition-initform slot))
+                     "#<unspecified>") (:newline)
+                     "  Function: "
+                     (:value ,(mop:slot-definition-initfunction slot))
+                     (:newline)))
+
+(defun emacs-inspect-java-class (class)
+  (let ((has-superclasses (java::jclass-superclass class))
+        (has-interfaces (plusp (length (java::jclass-interfaces class))))
+        (has-fields (plusp (length (#"getFields" class))))
+        (path (java::jcall "toString" 
+               (java::jcall "getResource" 
+                class
+                (concatenate 'string "/" (substitute #\/ #\. (java::jcall "getName" class)) ".class")))))
+    `(,(format nil "Java Class: ~a" (java::jcall "getName" class) )
+      (:newline)
+      "Path: " (:value ,path) (:newline)
+      ,@(if has-superclasses 
+            (list* "Superclasses: " (butlast (loop for super = (java::jclass-superclass class) then (java::jclass-superclass super)
+                            while super collect (list :value super (java::jcall "getName" super)) collect ", "))))
+      ,@(if has-interfaces
+            (list* '(:newline) "Implements Interfaces: "
+                   (butlast (loop for i across (java::jclass-interfaces class) collect (list :value i (java::jcall "getName" i)) collect ", "))))
+      (:newline) "Methods:" (:newline)
+      ,@(loop with declared = (map 'list (lambda(m) (java::jcall "toString" m)) (java::jcall "getDeclaredMethods" class))
+              for method across (java::jcall "getMethods" class) collect "  " 
+              collect (list :value method (java::jcall "toString" method)) 
+              when (find (java::jcall "toString" method) declared :test 'equalp) collect " (declared)"
+                collect '(:newline))
+      ,@(if has-fields
+            (list*
+             '(:newline) "Fields:" '(:newline)
+             (loop with declared = (map 'list (lambda(m) (java::jcall "toString" m)) (java::jcall "getDeclaredFields" class))
+              for field across (java::jcall "getFields" class) collect "  " 
+              collect (list :value field (java::jcall "toString" field)) 
+              when (find (java::jcall "toString" field) declared :test 'equalp) collect " (declared)"
+                collect '(:newline)))))))
+                 
+                 
 
 ;;;; Multithreading
 

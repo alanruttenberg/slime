@@ -253,29 +253,30 @@ be active in derived modes as well."
 
 (defun company-slime (command &optional arg &rest ignored)
   "Company mode backend for slime."
-  (cl-case command
-    (init
-     (slime-company-active-p))
-    (prefix
-     (when (and (slime-company-active-p)
-                (slime-connected-p)
-                (or slime-company-complete-in-comments-and-strings
-                    (null (company-in-string-or-comment))))
-       (company-grab-symbol)))
-    (candidates
-     (slime-company--fetch-candidates-async (substring-no-properties arg)))
-    (meta
-     (slime-company--arglist (substring-no-properties arg)))
-    (annotation
-     (concat " " (get-text-property 0 'flags arg)))
-    (doc-buffer
-     (slime-company--doc-buffer (substring-no-properties arg)))
-    (location
-     (slime-company--location (substring-no-properties arg)))
-    (post-completion
-     (slime-company--post-completion (substring-no-properties arg)))
-    (sorted
-     (eq slime-company-completion 'fuzzy))))
+  (and (slime-connected-p)
+       (cl-case command
+	 (init
+	  (slime-company-active-p))
+	 (prefix
+	  (when (and (slime-company-active-p)
+		     (slime-connected-p)
+		     (or slime-company-complete-in-comments-and-strings
+			 (null (company-in-string-or-comment))))
+	    (company-grab-symbol)))
+	 (candidates
+	  (slime-company--fetch-candidates-async (substring-no-properties arg)))
+	 (meta
+	  (slime-company--arglist (substring-no-properties arg)))
+	 (annotation
+	  (concat " " (get-text-property 0 'flags arg)))
+	 (doc-buffer
+	  (slime-company--doc-buffer (substring-no-properties arg)))
+	 (location
+	  (slime-company--location (substring-no-properties arg)))
+	 (post-completion
+	  (slime-company--post-completion (substring-no-properties arg)))
+	 (sorted
+	  (eq slime-company-completion 'fuzzy)))))
 
 (provide 'slime-company)
 

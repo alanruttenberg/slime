@@ -9,7 +9,12 @@
 ;;;
 
 (defpackage swank/abcl
-  (:use cl swank/backend))
+  (:use cl swank/backend)
+  (:import-from :java #:jcall #:jstatic #:jmethod #:jfield
+  #:jconstructor #:jnew-array #:jarray-length #:jarray-ref
+  #:jnew-array-from-array #:jclass #:jnew
+  #:jinstance-of-p #:jclass-superclass #:java-object #:jclass-interfaces #:java-exception
+  ) )
 
 (in-package swank/abcl)
 
@@ -147,7 +152,7 @@
   (ext:make-server-socket port))
 
 (defimplementation local-port (socket)
-  (java:jcall (java:jmethod "java.net.ServerSocket" "getLocalPort") socket))
+  (jcall (jmethod "java.net.ServerSocket" "getLocalPort") socket))
 
 (defimplementation close-socket (socket)
   (ext:server-socket-close socket))
@@ -166,36 +171,36 @@
 ;; faster please!
 (defimplementation string-to-utf8 (s)
   (jbytes-to-octets
-   (java:jcall
-    (java:jmethod "java.lang.String" "getBytes" "java.lang.String")
+   (jcall
+    (jmethod "java.lang.String" "getBytes" "java.lang.String")
     s
     "UTF8")))
 
 (defimplementation utf8-to-string (u)
-  (java:jnew
-   (java:jconstructor "org.armedbear.lisp.SimpleString"
+  (jnew
+   (jconstructor "org.armedbear.lisp.SimpleString"
                       "java.lang.String")
-   (java:jnew (java:jconstructor "java.lang.String" "[B" "java.lang.String")
+   (jnew (jconstructor "java.lang.String" "[B" "java.lang.String")
               (octets-to-jbytes u)
               "UTF8")))
 
 (defun octets-to-jbytes (octets)
   (declare (type octets (simple-array (unsigned-byte 8) (*))))
   (let* ((len (length octets))
-         (bytes (java:jnew-array "byte" len)))
+         (bytes (jnew-array "byte" len)))
     (loop for byte across octets
           for i from 0
-          do (java:jstatic (java:jmethod "java.lang.reflect.Array"  "setByte"
+          do (jstatic (jmethod "java.lang.reflect.Array"  "setByte"
                             "java.lang.Object" "int" "byte")
                            "java.lang.relect.Array"
                            bytes i byte))
     bytes))
 
 (defun jbytes-to-octets (jbytes)
-  (let* ((len (java:jarray-length jbytes))
+  (let* ((len (jarray-length jbytes))
          (octets (make-array len :element-type '(unsigned-byte 8))))
     (loop for i from 0 below len
-          for jbyte = (java:jarray-ref jbytes i)
+          for jbyte = (jarray-ref jbytes i)
           do (setf (aref octets i) jbyte))
     octets))
 
@@ -222,29 +227,29 @@
 (defimplementation getpid ()
   (handler-case
       (let* ((runtime
-              (java:jstatic "getRuntime" "java.lang.Runtime"))
+              (jstatic "getRuntime" "java.lang.Runtime"))
              (command
-              (java:jnew-array-from-array
+              (jnew-array-from-array
                "java.lang.String" #("sh" "-c" "echo $PPID")))
              (runtime-exec-jmethod
               ;; Complicated because java.lang.Runtime.exec() is
               ;; overloaded on a non-primitive type (array of
               ;; java.lang.String), so we have to use the actual
               ;; parameter instance to get java.lang.Class
-              (java:jmethod "java.lang.Runtime" "exec"
-                            (java:jcall
-                             (java:jmethod "java.lang.Object" "getClass")
+              (jmethod "java.lang.Runtime" "exec"
+                            (jcall
+                             (jmethod "java.lang.Object" "getClass")
                              command)))
              (process
-              (java:jcall runtime-exec-jmethod runtime command))
+              (jcall runtime-exec-jmethod runtime command))
              (output
-              (java:jcall (java:jmethod "java.lang.Process" "getInputStream")
+              (jcall (jmethod "java.lang.Process" "getInputStream")
                           process)))
-         (java:jcall (java:jmethod "java.lang.Process" "waitFor")
+         (jcall (jmethod "java.lang.Process" "waitFor")
                      process)
 	 (loop :with b :do
 	    (setq b
-		  (java:jcall (java:jmethod "java.io.InputStream" "read")
+		  (jcall (jmethod "java.io.InputStream" "read")
 			      output))
 	    :until (member b '(-1 #x0a))	; Either EOF or LF
 	    :collecting (code-char b) :into result
@@ -398,7 +403,7 @@
                           '("SWANK" "SWANK-REPL" "SWANK/BACKEND")
                           :test 'equal))
                   (and (eq (car frame) 'apply)
-                       (eq (second frame) #'java::jstatic))))
+                       (eq (second frame) #'jstatic))))
                 (and (functionp (car frame))
                      (null (cdr frame))
                      (null (FUNCTION-NAME (car frame))))
@@ -473,7 +478,7 @@
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403
 (defun nth-frame-list (index)
-  (java:jcall "toLispList" (nth-frame index)))
+  (jcall "toLispList" (nth-frame index)))
 
 (defun match-lambda (operator values)
   (jvm::match-lambda-list
@@ -502,7 +507,7 @@
                   :value value)))
 
 (defimplementation frame-var-value (index id)
-  (elt (rest (java:jcall "toLispList" (nth-frame index))) id))
+  (elt (rest (jcall "toLispList" (nth-frame index))) id))
 
 (defimplementation disassemble-frame (index)
   (sys::disassemble (frame-function (nth-frame index))))
@@ -512,7 +517,7 @@
     (cond 
       ((keywordp (car list))
        (find (getf list :method) 
-             (#"getDeclaredMethods" (java::jclass (getf list :class)))
+             (jcall "getDeclaredMethods" (jclass (getf list :class)))
              :key #"getName" :test 'equal))
       (t (car list) ))))
        
@@ -618,11 +623,11 @@
       (setf function (mop::funcallable-instance-function function)))
     ;; functions are execute methods of class
     (when (or (functionp function) (special-operator-p arg))
-      (let ((fclass (java:jcall "getClass" function)))
-        (let ((classname (java:jcall "getName" fclass)))
+      (let ((fclass (jcall "getClass" function)))
+        (let ((classname (jcall "getName" fclass)))
           (destructuring-bind (class local) (if (find #\$ classname)
                                                 (split-string classname "\\$")
-                                                (list classname (#"replaceFirst" classname "([^.]*\\.)*" "")))
+                                                (list classname (jcall "replaceFirst" classname "([^.]*\\.)*" "")))
             (unless (member local '("MacroObject" "CompiledClosure" "Closure") :test 'equal)
             ;; look for java source
             (let* ((partial-path   (substitute #\/ #\. class))
@@ -646,11 +651,11 @@
                     ))))))))))
 
 (defun symbol-defined-in-java (symbol)
-  (loop  with internal-name1 = (#"replaceAll" (#"replaceAll" (string symbol) "\\*" "") "-" "_")
-         with internal-name2 = (#"replaceAll" (#"replaceAll" (string symbol) "\\*" "_") "-" "_")
+  (loop  with internal-name1 = (jcall "replaceAll" (jcall "replaceAll" (string symbol) "\\*" "") "-" "_")
+         with internal-name2 = (jcall "replaceAll" (jcall "replaceAll" (string symbol) "\\*" "_") "-" "_")
          for class in 
                    (load-time-value (mapcar
-                                     'java::jclass
+                                     'jclass
                                      '("org.armedbear.lisp.Package"
                                        "org.armedbear.lisp.Symbol"
                                        "org.armedbear.lisp.Debug"
@@ -666,7 +671,7 @@
 (defun maybe-implementation-variable (s)
   (let ((field (symbol-defined-in-java s)))
     (and field
-         (let ((class (#"getName" (#"getDeclaringClass" field))))
+         (let ((class (jcall "getName" (jcall "getDeclaringClass" field))))
            (let* ((partial-path (substitute #\/ #\. class))
                   (java-path (concatenate 'string partial-path ".java"))
                   (found-in-source-path (find-file-in-path java-path *source-path*)))
@@ -724,7 +729,7 @@
     (and name (source-location name))))
 
 (defun system-property (name)
-  (java:jstatic "getProperty" "java.lang.System" name))
+  (jstatic "getProperty" "java.lang.System" name))
 
 (defun pathname-parent (pathname)
   (make-pathname :directory (butlast (pathname-directory pathname))))
@@ -734,12 +739,12 @@
 
 (defun split-string (string regexp)
   (coerce
-   (java:jcall (java:jmethod "java.lang.String" "split" "java.lang.String")
+   (jcall (jmethod "java.lang.String" "split" "java.lang.String")
                string regexp)
    'list))
 
 (defun path-separator ()
-  (java:jfield "java.io.File" "pathSeparator"))
+  (jfield "java.io.File" "pathSeparator"))
 
 (defun search-path-property (prop-name)
   (let ((string (system-property prop-name)))
@@ -772,11 +777,11 @@
   "List of directories to search for source files.")
 
 (defun zipfile-contains-p (zipfile-name entry-name)
-  (let ((zipfile (java:jnew (java:jconstructor "java.util.zip.ZipFile"
+  (let ((zipfile (jnew (jconstructor "java.util.zip.ZipFile"
                                                "java.lang.String")
                             zipfile-name)))
-    (java:jcall
-     (java:jmethod "java.util.zip.ZipFile" "getEntry" "java.lang.String")
+    (jcall
+     (jmethod "java.util.zip.ZipFile" "getEntry" "java.lang.String")
      zipfile entry-name)))
 
 ;; (find-file-in-path "java/lang/String.java" *source-path*)
@@ -881,10 +886,10 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
             do
                (when (sys::autoloadp symbol)
                  (sys::resolve symbol))
-               (let ((source (get sym 'sys::source))
+               (let ((source (or (get sym 'ext::source) (get sym 'sys::source)))
                      (i-var  (maybe-implementation-variable sym))
                      (i-fun  (implementation-source-location sym)))
-                 (when source  (setq sources (append sources (get sym 'sys::source))))
+                 (when source  (setq sources (append sources (or (get sym 'ext::source) (get sym 'sys::source)))))
                  (when i-var (push i-var implementation-variables))
                  (when i-fun (push i-fun implementation-functions))))
     (setq sources (remove-duplicates sources :test 'equalp))
@@ -965,13 +970,13 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                  '(:newline)
                  (with-output-to-string (desc) (describe o desc)))))))
 
-(defmethod emacs-inspect ((o java::java-exception))
+(defmethod emacs-inspect ((o java:java-exception))
   (append (call-next-method)
           (list '(:newline) "Stack trace"
                       '(:newline)
-                      (let ((w (java::jnew "java.io.StringWriter"))) 
-                        (java::jcall "printStackTrace" (java::java-exception-cause o) (java::jnew "java.io.PrintWriter" w))
-                        (java::jcall "toString" w)))
+                      (let ((w (jnew "java.io.StringWriter"))) 
+                        (jcall "printStackTrace" (java:java-exception-cause o) (jnew "java.io.PrintWriter" w))
+                        (jcall "toString" w)))
           ))
 
 (defmethod emacs-inspect ((slot mop::slot-definition))
@@ -1014,12 +1019,12 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 (defparameter *to-string-hashtable* (make-hash-table))
 
 (defmethod emacs-inspect ((o java:java-object))
-  (if (java::jinstance-of-p o (java::jclass "java.lang.Class"))
+  (if (jinstance-of-p o (jclass "java.lang.Class"))
       (emacs-inspect-java-class o)
       (let ((to-string (lambda ()
                          (handler-case
                              (setf (gethash o *to-string-hashtable*)
-                                   (java:jcall "toString" o))
+                                   (jcall "toString" o))
                            (t (e)
                              (setf (gethash o *to-string-hashtable*)
                                    (format nil
@@ -1049,39 +1054,59 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                      (:value ,(mop:slot-definition-initfunction slot))
                      (:newline)))
 
+(defun inspector-java-fields (class)
+  (let ((them (loop for super = class then (jclass-superclass super)
+                    while super append (map 'list (lambda(f) (cons f super) )(jcall "getDeclaredFields" super) ))))
+    (loop for this in them 
+          for top? =  (eq (cdr this) class)
+          for pre = (subseq (jcall "toString" (car this)) 0 (1+ (position #\. (jcall "toString" (car this))  :from-end t)))
+          collect "  "
+          collect (list :value (car this) pre)
+          collect (list :strong-value (car this) (jcall "getName" (car this)) )
+          unless top?
+            collect " from "
+          unless top?
+            collect (list :value (cdr this) (jcall "toString" (cdr this)) )
+          collect '(:newline))))
+
+(defun inspector-java-methods (class)
+  (let ((them (jcall "getDeclaredMethods" class)))
+    (loop for this across them
+          for desc = (jcall "toString" this)
+          for paren =  (position #\( desc)
+          for dot = (position #\. (subseq desc 0 paren) :from-end t)
+          for pre = (subseq desc 0 dot)
+          for name = (subseq desc dot paren)
+          for after = (subseq desc paren)
+          collect "  "
+          collect (list :value this pre)
+          collect (list :strong-value this name)
+          collect (list :value this after)
+          collect '(:newline))))
+
 (defun emacs-inspect-java-class (class)
-  (let ((has-superclasses (java::jclass-superclass class))
-        (has-interfaces (plusp (length (java::jclass-interfaces class))))
-        (has-fields (plusp (length (#"getFields" class))))
-        (path (java::jcall "toString" 
-               (java::jcall "getResource" 
+  (let ((has-superclasses (jclass-superclass class))
+        (has-interfaces (plusp (length (jclass-interfaces class))))
+        (fields (inspector-java-fields class))
+        (path (jcall "toString" 
+               (jcall "getResource" 
                 class
-                (concatenate 'string "/" (substitute #\/ #\. (java::jcall "getName" class)) ".class")))))
-    `(,(format nil "Java Class: ~a" (java::jcall "getName" class) )
+                (concatenate 'string "/" (substitute #\/ #\. (jcall "getName" class)) ".class")))))
+    `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
-      "Path: " (:value ,path) (:newline)
+      (:label "Path: ") (:value ,path) (:newline)
       ,@(if has-superclasses 
-            (list* "Superclasses: " (butlast (loop for super = (java::jclass-superclass class) then (java::jclass-superclass super)
-                            while super collect (list :value super (java::jcall "getName" super)) collect ", "))))
+            (list* '(:label "Superclasses: ") (butlast (loop for super = (jclass-superclass class) then (jclass-superclass super)
+                            while super collect (list :value super (jcall "getName" super)) collect ", "))))
       ,@(if has-interfaces
-            (list* '(:newline) "Implements Interfaces: "
-                   (butlast (loop for i across (java::jclass-interfaces class) collect (list :value i (java::jcall "getName" i)) collect ", "))))
-      (:newline) "Methods:" (:newline)
-      ,@(loop with declared = (map 'list (lambda(m) (java::jcall "toString" m)) (java::jcall "getDeclaredMethods" class))
-              for method across (java::jcall "getMethods" class) collect "  " 
-              collect (list :value method (java::jcall "toString" method)) 
-              when (find (java::jcall "toString" method) declared :test 'equalp) collect " (declared)"
-                collect '(:newline))
-      ,@(if has-fields
+            (list* '(:newline) '(:label "Implements Interfaces: ")
+                   (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))
+      (:newline) (:label "Methods:") (:newline)
+      ,@(inspector-java-methods class)
+      ,@(if fields
             (list*
-             '(:newline) "Fields:" '(:newline)
-             (loop with declared = (map 'list (lambda(m) (java::jcall "toString" m)) (java::jcall "getDeclaredFields" class))
-              for field across (java::jcall "getFields" class) collect "  " 
-              collect (list :value field (java::jcall "toString" field)) 
-              when (find (java::jcall "toString" field) declared :test 'equalp) collect " (declared)"
-                collect '(:newline)))))))
-                 
-                 
+             '(:newline) '(:label "Fields:") '(:newline)
+             fields)))))
 
 ;;;; Multithreading
 

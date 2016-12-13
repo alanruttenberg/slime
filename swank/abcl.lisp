@@ -372,70 +372,71 @@
                                  (first (sys:frame-to-list frame)))))))
     (funcall debugger-loop-fn)))
 
+(defvar *aggressive-backtrace-trim* nil)
+
+;; *aggressive-backtrace-trim* causes nth-frame to get wrong index sometimes :-(
+
 (defun backtrace (start end)
   "A backtrace without initial SWANK frames."
   (let ((backtrace (sys:backtrace)))
-<<<<<<< HEAD
-    (if *aggressive-backtrace-trim*
-        (setq backtrace (remove-if 'noise-frame-p backtrace)))
-    (backtrace-trim-sldb-internals 
-     (subseq (or (member *sldb-topframe* backtrace) backtrace)
-             start end))))
+;;     (if *aggressive-backtrace-trim*
+;;         (setq backtrace (remove-if 'noise-frame-p backtrace)))
+;;     (backtrace-trim-sldb-internals 
+;;      (subseq (or (member *sldb-topframe* backtrace) backtrace)
+;;              start end))))
 
 
-;; and maybe this should all be done on the slime side (probably not because we've already rendered to string)
-(defun noise-frame-p (frame)
-  (and *aggressive-backtrace-trim*
-       (or
-        (and (typep frame 'sys::java-stack-frame )
-             (member (getf (sys::frame-to-list frame) :method) '("jstatic" "error" "execute") :test 'equal)
-             )
-        (and (typep frame 'sys::lisp-stack-frame)
-             (let ((frame (sys::frame-to-list frame)))
-               (or 
-                (and
-                 (symbolp (car frame))
-                 (or 
-                  (null '(member (package-name (symbol-package (car frame)))
-                          '("SWANK" "SWANK-REPL" "SWANK/BACKEND")
-                          :test 'equal))
-                  (and (eq (car frame) 'apply)
-                       (eq (second frame) #'jstatic))))
-                (and (functionp (car frame))
-                     (null (cdr frame))
-                     (null (FUNCTION-NAME (car frame))))
-                (and (eq (car frame) 'funcall)
-                     (functionp (second frame))
-                     (null (cddr frame))
-                     (null (FUNCTION-NAME (second frame))))))
-             ))))
+;; ;; and maybe this should all be done on the slime side (probably not because we've already rendered to string)
+;; (defun noise-frame-p (frame)
+;;   (and *aggressive-backtrace-trim*
+;;        (or
+;;         (and (typep frame 'sys::java-stack-frame )
+;;              (member (getf (sys::frame-to-list frame) :method) '("jstatic" "error" "execute") :test 'equal)
+;;              )
+;;         (and (typep frame 'sys::lisp-stack-frame)
+;;              (let ((frame (sys::frame-to-list frame)))
+;;                (or 
+;;                 (and
+;;                  (symbolp (car frame))
+;;                  (or 
+;;                   (null '(member (package-name (symbol-package (car frame)))
+;;                           '("SWANK" "SWANK-REPL" "SWANK/BACKEND")
+;;                           :test 'equal))
+;;                   (and (eq (car frame) 'apply)
+;;                        (eq (second frame) #'jstatic))))
+;;                 (and (functionp (car frame))
+;;                      (null (cdr frame))
+;;                      (null (FUNCTION-NAME (car frame))))
+;;                 (and (eq (car frame) 'funcall)
+;;                      (functionp (second frame))
+;;                      (null (cddr frame))
+;;                      (null (FUNCTION-NAME (second frame))))))
+;;              ))))
 
-(defun backtrace-trim-sldb-internals (backtrace)
-  (if (not *aggressive-backtrace-trim*) ;; ALANR::FIXME. nth-frame fails if we do this. er still fails. Presumably noise-p. Problem is that my messing with the backtrace somehow gets nth-frame called with the wrong index. 
-      backtrace
-      (let ((pos (position-if (lambda(f) 
-                                (and (typep f 'sys::lisp-stack-frame)
-                                     (let ((frame (sys::frame-to-list f)))
-                                       (eq (car frame) 'SYSTEM::RUN-HOOK)
-                                       (eq (second frame) 'SYSTEM::*INVOKE-DEBUGGER-HOOK*))))
-                              backtrace)))
-        (setq backtrace (if pos (subseq backtrace (1+ pos)) backtrace))
-        (let ((pos (position-if
-                    (lambda(f) 
-                      (and (typep f 'sys::lisp-stack-frame)
-                           (let ((frame (sys::frame-to-list f)))
-                             (and
-                              (eq (car frame) 'SYSTEM::%EVAL)
-                              (consp (second frame))
-                              (eq (car (second frame)) (intern "LISTENER-EVAL" "SWANK-REPL"))))))
-                    backtrace)))
-          (if pos (subseq backtrace 0 pos) backtrace)))))
+;; (defun backtrace-trim-sldb-internals (backtrace)
+;;   (if (not *aggressive-backtrace-trim*) ;; ALANR::FIXME. nth-frame fails if we do this. er still fails. Presumably noise-p. Problem is that my messing with the backtrace somehow gets nth-frame called with the wrong index. 
+;;       backtrace
+;;       (let ((pos (position-if (lambda(f) 
+;;                                 (and (typep f 'sys::lisp-stack-frame)
+;;                                      (let ((frame (sys::frame-to-list f)))
+;;                                        (eq (car frame) 'SYSTEM::RUN-HOOK)
+;;                                        (eq (second frame) 'SYSTEM::*INVOKE-DEBUGGER-HOOK*))))
+;;                               backtrace)))
+;;         (setq backtrace (if pos (subseq backtrace (1+ pos)) backtrace))
+;;         (let ((pos (position-if
+;;                     (lambda(f) 
+;;                       (and (typep f 'sys::lisp-stack-frame)
+;;                            (let ((frame (sys::frame-to-list f)))
+;;                              (and
+;;                               (eq (car frame) 'SYSTEM::%EVAL)
+;;                               (consp (second frame))
+;;                               (eq (car (second frame)) (intern "LISTENER-EVAL" "SWANK-REPL"))))))
+;;                     backtrace)))
+;;           (if pos (subseq backtrace 0 pos) backtrace)))))
 
-=======
+;; =======
     (subseq (or (member *sldb-topframe* backtrace) backtrace)
             start end)))
->>>>>>> inspector
-
 (defun nth-frame (index)
   (nth index (backtrace 0 nil)))
 
@@ -459,27 +460,24 @@
       method)))
 
 (defimplementation print-frame (frame stream)
-<<<<<<< HEAD
-  (if (typep frame 'sys::lisp-stack-frame)
-      (if (not (jss-p))
-          (write-string (sys:frame-to-string frame) stream)
-          (progn
-            (write-char #\( stream) 
-            (loop for (el . rest) on (sys::frame-to-list frame)
-                  for method =  (swank/abcl::matches-jss-call el)
-                  do
-                     (cond (method 
-                            (format stream "(#~s ~{~s~^~})" method (cdr el)))
-                            (t
-                             (prin1 el stream)))
-                     (unless (null rest) (write-char #\space stream)))
-            (write-char #\) stream)))
-      (write-string (sys:frame-to-string frame) stream)))
+  ;; (if (typep frame 'sys::lisp-stack-frame)
+  ;;     (if (not (jss-p))
+  ;;         (write-string (sys:frame-to-string frame) stream)
+  ;;         (progn
+  ;;           (write-char #\( stream) 
+  ;;           (loop for (el . rest) on (sys::frame-to-list frame)
+  ;;                 for method =  (swank/abcl::matches-jss-call el)
+  ;;                 do
+  ;;                    (cond (method 
+  ;;                           (format stream "(#~s ~{~s~^~})" method (cdr el)))
+  ;;                           (t
+  ;;                            (prin1 el stream)))
+  ;;                    (unless (null rest) (write-char #\space stream)))
+  ;;           (write-char #\) stream)))
+  ;;     (write-string (sys:frame-to-string frame) stream)))
 
-=======
   (write-string (sys:frame-to-string frame)
                 stream))
->>>>>>> inspector
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403
@@ -515,25 +513,22 @@
 (defimplementation frame-var-value (index id)
   (elt (rest (jcall "toLispList" (nth-frame index))) id))
 
-#+nil
 (defimplementation disassemble-frame (index)
-<<<<<<< HEAD
   (sys::disassemble (frame-function (nth-frame index))))
 
-(defun frame-function (frame)
-  (let ((list (sys::frame-to-list frame)))
-    (cond 
-      ((keywordp (car list))
-       (find (getf list :method) 
-             (jcall "getDeclaredMethods" (jclass (getf list :class)))
-             :key #"getName" :test 'equal))
-      (t (car list) ))))
+;;(disassemble (debugger:frame-function (nth-frame index))))
+
+;; (defun frame-function (frame)
+;;   (let ((list (sys::frame-to-list frame)))
+;;     (cond 
+;;       ((keywordp (car list))
+;;        (find (getf list :method) 
+;;              (jcall "getDeclaredMethods" (jclass (getf list :class)))
+;;              :key #"getName" :test 'equal))
+;;       (t (car list) ))))
        
 ;; ALANR:: ARGHH -- index isn't right
-=======
-  (disassemble (debugger:frame-function (nth-frame index))))
 
->>>>>>> inspector
 (defimplementation frame-source-location (index)
   (let ((frame (nth-frame index)))
     (or (source-location (nth-frame index))
@@ -625,7 +620,6 @@
 
 (defgeneric source-location (object))
 
-<<<<<<< HEAD
 ;; try to find some kind of source for internals
 (defun implementation-source-location (arg)
   (let ((function (cond ((functionp arg)
@@ -717,33 +711,6 @@
                         (list :position (1+ pos))
                         (list :function-name (string symbol)))
                    (:align t))))))))
-=======
-(defmethod source-location ((symbol symbol))
-  (when (pathnamep (ext:source-pathname symbol))
-    (let ((pos (ext:source-file-position symbol))
-          (path (namestring (ext:source-pathname symbol))))
-      (cond ((ext:pathname-jar-p path)
-             `(:location
-               ;; strip off "jar:file:" = 9 characters
-               (:zip ,@(split-string (subseq path 9) "!/"))
-               ;; pos never seems right. Use function name.
-               (:function-name ,(string symbol))
-               (:align t)))
-            ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-             ;; conspire with swank-compile-string to keep the buffer
-             ;; name in a pathname whose device is "emacs-buffer".
-             `(:location
-                (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                (:function-name ,(string symbol))
-                (:align t)))
-            (t
-             `(:location
-                (:file ,path)
-                ,(if pos
-                     (list :position (1+ pos))
-                     (list :function-name (string symbol)))
-                (:align t)))))))
->>>>>>> inspector
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -834,7 +801,7 @@
              (cond ((not (pathname-type dir))
                     (let ((f (probe-file (merge-pathnames filename dir))))
                       (and f `(:file ,(namestring f)))))
-                   ((equal (pathname-type dir) "zip")
+                   ((member (pathname-type dir) '("zip" "jar") :test 'equal)
                     (try-zip dir))
                    (t (error "strange path element: ~s" path))))
            (try-zip (zip)

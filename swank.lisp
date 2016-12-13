@@ -1745,23 +1745,13 @@ last form."
   (with-input-from-string (stream string)
     (let (- values)
       (loop
-	(handler-bind (#+abcl(reader-error
-			 (lambda (condition)
-			   (if (equal (slot-value condition 'sys::format-control)
-				      "Unmatched right parenthesis.")
-			       (progn  
-                                 ;; this has got to be the most irritating way to get into the debugger.
-                                 ;; stop it.
-                                 (warn "ignoring extra right parenthesis")
-                                 (return-from eval-region (values values -)))
-			       (error condition)))))
-	  (let ((form (read stream nil stream)))
-	    (when (eq form stream)
-	      (finish-output)
-	      (return (values values -)))
-	    (setq - form)
-	    (setq values (multiple-value-list (eval form)))
-	    (finish-output)))))))
+       (let ((form (read stream nil stream)))
+         (when (eq form stream)
+           (finish-output)
+           (return (values values -)))
+         (setq - form)
+         (setq values (multiple-value-list (eval form)))
+         (finish-output))))))
 
 (defslimefun interactive-eval-region (string)
   (with-buffer-syntax ()
@@ -3021,7 +3011,7 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
 
 (defun xref>elisp (xref)
   (destructuring-bind (name loc) xref
-    (list (if (stringp name) name (to-string name) ) loc)))
+    (list (to-string name) loc)))
 
 
 ;;;;; Lazy lists

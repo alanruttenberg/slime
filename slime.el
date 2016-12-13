@@ -5180,6 +5180,7 @@ CONTS is a list of pending Emacs continuations."
     (unless (equal sldb-level level)
       (setq buffer-read-only nil)
       (sldb-mode)
+      (font-lock-mode -1)
       (setq slime-current-thread thread)
       (setq sldb-level level)
       (setq mode-name (format "sldb[%d]" sldb-level))

@@ -972,14 +972,14 @@ part of *sysdep-pathnames* in swank.loader.lisp.
     `("The object is of type " ,(symbol-name (type-of o)) "." (:newline)
       ,@(if parts
            (loop :for (label . value) :in parts
-              :appending (label-value-line label value))
-           (list "No inspectable parts, dumping output of CL:DESCRIBE:"
+              :appending (list (list :label label) (list :values value (princ-to-string value))))
+           (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
                  '(:newline)
                  (with-output-to-string (desc) (describe o desc)))))))
 
 (defmethod emacs-inspect ((o java:java-exception))
   (append (call-next-method)
-          (list '(:newline) "Stack trace"
+          (list '(:newline) '(:label "Stack trace")
                       '(:newline)
                       (let ((w (jnew "java.io.StringWriter"))) 
                         (jcall "printStackTrace" (java:java-exception-cause o) (jnew "java.io.PrintWriter" w))
@@ -994,29 +994,29 @@ part of *sysdep-pathnames* in swank.loader.lisp.
     ,@(when (slot-definition-documentation slot)
             `((:value ,(slot-definition-documentation slot)) (:newline)))
     "Initialization:" (:newline)
-    "  Args: " (:value ,(mop:slot-definition-initargs slot)) (:newline)
-    "  Form: "  ,(if (mop:slot-definition-initfunction slot)
+    (:label "  Args: ") (:value ,(mop:slot-definition-initargs slot)) (:newline)
+    (:label "  Form: ")  ,(if (mop:slot-definition-initfunction slot)
                      `(:value ,(mop:slot-definition-initform slot))
                      "#<unspecified>") (:newline)
-                     "  Function: "
+                     (:label "  Function: ")
                      (:value ,(mop:slot-definition-initfunction slot))
                      (:newline)))
 
 (defmethod emacs-inspect ((f function))
   `(,@(when (function-name f)
-            `("Name: "
+            `((:label "Name: ")
               ,(princ-to-string (function-name f)) (:newline)))
       ,@(multiple-value-bind (args present)
                              (sys::arglist f)
                              (when present
-                               `("Argument list: "
+                               `((:label "Argument list: ")
                                  ,(princ-to-string args) (:newline))))
       (:newline)
       #+nil,@(when (documentation f t)
                    `("Documentation:" (:newline)
                                       ,(documentation f t) (:newline)))
       ,@(when (function-lambda-expression f)
-              `("Lambda expression:"
+              `((:label "Lambda expression:")
                 (:newline) ,(princ-to-string
                              (function-lambda-expression f)) (:newline)))))
 
@@ -1024,6 +1024,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 ;;; non-computationally expensive operation this isn't always the
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table))
+
 
 (defmethod emacs-inspect ((o java:java-object))
   (if (jinstance-of-p o (jclass "java.lang.Class"))

@@ -84,7 +84,8 @@ that the character is not escaped."
      (if (and (eq major-mode 'slime-repl-mode) ;; no point looking before the input start
 	      (boundp 'slime-repl-input-start-mark))
 	 (max (line-beginning-position -500) (marker-position slime-repl-input-start-mark))
-        (point-max)))
+       (line-beginning-position -500))
+     (point-max))
     (save-excursion
       (let ((suffix (list slime-cursor-marker)))
         (cond ((slime-compare-char-syntax #'char-after "(" t)

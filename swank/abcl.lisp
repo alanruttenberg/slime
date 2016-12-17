@@ -1046,11 +1046,14 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                 '(:newline)))
       ))
 
+(defvar *slime-inspector-hyperspec-in-browser* t
+  "If t then invoking hyperspec within the inspector browses the hyperspec in an emacs buffer, otherwise respecting the value of browse-url-browser-function")
 
 (defun hyperspec-do (name)
   (let ((form `(let ((browse-url-browser-function 
-                              (or (and slime-inspector-hyperspec-in-browser (lambda(a v) (eww a))) 
-                                  browse-url-browser-function)))
+                       ,(if *slime-inspector-hyperspec-in-browser* 
+                            '(lambda(a v) (eww a))
+                            'browse-url-browser-function)))
                         (slime-hyperdoc-lookup ,name))))
     (swank::eval-in-emacs form t)))
 

@@ -21,6 +21,7 @@
 (defun slime-allsymbols-company--enable ()
   (setq slime-completion-at-point-functions (subst 'dabbrev-expand-complete 'slime-simple-completion-at-point slime-completion-at-point-functions))
   (setq company-backends (remove 'company-slime company-backends))
+  (setq company-backends (cons 'company-slime-allsymbols company-backends))
   (dolist (h '(slime-mode-hook slime-repl-mode-hook sldb-mode-hook))
     (remove-hook h 'slime-company-maybe-enable)
     (add-hook h 'slime-allsymbols-company-maybe-enable)))

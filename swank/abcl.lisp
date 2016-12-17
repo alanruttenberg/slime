@@ -89,6 +89,10 @@
   (declare (ignore class))
   (system::slot-value object (slot-definition-name slotdef)))
 
+(defun (setf slot-value-using-class) (new class object slotdef )
+  (declare (ignore class))
+  (mop::%set-slot-value object (slot-definition-name slotdef) new))
+
 (import-to-swank-mop
  '( ;; classes
    cl:standard-generic-function
@@ -140,6 +144,7 @@
    mop:slot-definition-writers
    slot-boundp-using-class
    slot-value-using-class
+   set-slot-value-using-class
    mop:slot-makunbound-using-class))
 
 ;;;; TCP Server
@@ -284,8 +289,18 @@
         (t :not-available)))
 
 (defimplementation function-name (function)
-  (nth-value 2 (function-lambda-expression function)))
+  (or (nth-value 2 (function-lambda-expression function))
+      (let* ((class (#"getClass" function))
+             (loaded-from (sys::get-loaded-from function))
+             (name (#"replace" (#"getName" class) "org.armedbear.lisp." ""))
+             (where (and loaded-from (concatenate 'string (pathname-name loaded-from) "." (pathname-type loaded-from)))))
+        `(:anonymous-function ,name ,@(if (sys::arglist function)  (sys::arglist function)) 
+                              ,@(if where (list (list :from where)))))))
 
+(defmethod print-object ((f function) stream)
+  (print-unreadable-object (f stream :identity t)
+    (princ (function-name  f) stream)))
+                          
 (defimplementation macroexpand-all (form &optional env)
   (ext:macroexpand-all form env))
 
@@ -858,18 +873,6 @@
       (destructuring-bind (name qualifiers specializers) (cdr type)
         `(,(car type) ,(p name) ,(mapcar #'p specializers) ,@(mapcar #'p qualifiers))))))
 
-#+nil 
-  ;; override swank's because the swank version decides too early that there isn't a definition, e.g. for a class
-  (defslimefun swank::find-definitions-for-emacs (name)
-    "Return a list ((DSPEC LOCATION) ...) of definitions for NAME.
-DSPEC is a string and LOCATION a source location. NAME is a string."
-    (let ((symbol (intern (string-upcase (subseq name (or (and (position #\: name :from-end t)
-                                                               (1+ (position #\: name :from-end t)))
-                                                          0))) 'keyword)))
-      (let ((defs (find-definitions symbol)))
-        (and defs
-             (mapcar #'swank::xref>elisp (find-definitions symbol))))))
-
 ;; for abcl source, check if it is still there, and if not, look in abcl jar instead
 (defun maybe-redirect-to-jar (path)
   (setq path (namestring path))
@@ -884,6 +887,11 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
           path)))
 
 (defimplementation find-definitions (symbol)
+  (if (stringp symbol) 
+      ;; allow a string to be passed. If it is package prefixed, remove the prefix 
+      (setq symbol (intern (string-upcase 
+                            (subseq symbol (1+ (or (position #\: symbol :from-end t) -1))))
+                           'keyword)))
   (let ((sources nil)
         (implementation-variables nil)
         (implementation-functions nil))
@@ -972,7 +980,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
     `("The object is of type " ,(symbol-name (type-of o)) "." (:newline)
       ,@(if parts
            (loop :for (label . value) :in parts
-              :appending (list (list :label label) (list :values value (princ-to-string value))))
+              :appending (list (list :label (string-capitalize label)) ": " (list :value value (princ-to-string value)) '(:newline)))
            (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
                  '(:newline)
                  (with-output-to-string (desc) (describe o desc)))))))
@@ -1018,7 +1026,36 @@ part of *sysdep-pathnames* in swank.loader.lisp.
       ,@(when (function-lambda-expression f)
               `((:label "Lambda expression:")
                 (:newline) ,(princ-to-string
-                             (function-lambda-expression f)) (:newline)))))
+                             (function-lambda-expression f)) (:newline)))
+      ,@(when (sys::get-loaded-from f)
+          (list `(:label "Defined in: ") `(:value ,(sys::get-loaded-from f) ,(namestring (sys::get-loaded-from f))) '(:newline))
+          )
+      ,@(let ((fields (#"getDeclaredFields" (#"getClass" f))))
+          (when (plusp (length fields))
+            (list* '(:label "Internal fields: ") '(:newline)
+                   (loop for field across fields
+                         do (#"setAccessible" field t)
+                         append
+                         (let ((value (#"get" field f)))
+                           (list `(:label ,(#"getName" field)) ": " `(:value ,value ,(princ-to-string value)) '(:newline)))))))
+      ,@(when (and (function-name f) (symbolp (function-name f)) (eq (symbol-package (function-name f)) (find-package :cl)))
+          (list '(:newline) (list :action "Lookup in hyperspec"
+                      (lambda () (hyperspec-do (symbol-name (function-name f))))
+                      :refreshp nil
+                      )
+                '(:newline)))
+      ))
+
+(defvar *slime-inspector-hyperspec-in-browser* t
+  "If t then invoking hyperspec within the inspector browses the hyperspec in an emacs buffer, otherwise respecting the value of browse-url-browser-function")
+
+(defun hyperspec-do (name)
+  (let ((form `(let ((browse-url-browser-function 
+                       ,(if *slime-inspector-hyperspec-in-browser* 
+                            '(lambda(a v) (eww a))
+                            'browse-url-browser-function)))
+                        (slime-hyperdoc-lookup ,name))))
+    (swank::eval-in-emacs form t)))
 
 ;;; Although by convention toString() is supposed to be a
 ;;; non-computationally expensive operation this isn't always the
@@ -1063,23 +1100,30 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                      (:newline)))
 
 (defun inspector-java-fields (class)
-  (let ((them (loop for super = class then (jclass-superclass super)
-                    while super append (map 'list (lambda(f) (cons f super) )(jcall "getDeclaredFields" super) ))))
-    (loop for this in them 
-          for top? =  (eq (cdr this) class)
-          for pre = (subseq (jcall "toString" (car this)) 0 (1+ (position #\. (jcall "toString" (car this))  :from-end t)))
-          collect "  "
-          collect (list :value (car this) pre)
-          collect (list :strong-value (car this) (jcall "getName" (car this)) )
-          unless top?
-            collect " from "
-          unless top?
-            collect (list :value (cdr this) (jcall "toString" (cdr this)) )
-          collect '(:newline))))
+  (loop for super = class then (jclass-superclass super)
+        while super
+        for fields = (jcall "getDeclaredFields" super)
+        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(#"getName" super)) '(:newline))
+        when (and (plusp (length fields)) fromline)
+          append fromline
+        append
+        (loop for this across fields
+              for pre = (subseq (jcall "toString" this)
+                                0 
+                                (1+ (position #\. (jcall "toString" this)  :from-end t)))
+              collect "  "
+              collect (list :value this pre)
+              collect (list :strong-value this (jcall "getName" this) )
+              collect '(:newline))))
 
 (defun inspector-java-methods (class)
-  (let ((them (jcall "getDeclaredMethods" class)))
-    (loop for this across them
+   (loop for super = class then (jclass-superclass super)
+        while super
+        for methods = (jcall "getDeclaredMethods" super)
+        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(#"getName" super)) '(:newline))
+        when (and (plusp (length methods)) fromline) append fromline
+        append
+        (loop for this across methods
           for desc = (jcall "toString" this)
           for paren =  (position #\( desc)
           for dot = (position #\. (subseq desc 0 paren) :from-end t)
@@ -1096,13 +1140,12 @@ part of *sysdep-pathnames* in swank.loader.lisp.
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
         (fields (inspector-java-fields class))
-        (path (jcall "toString" 
-               (jcall "getResource" 
+        (path (jcall "getResource" 
                 class
-                (concatenate 'string "/" (substitute #\/ #\. (jcall "getName" class)) ".class")))))
+                (concatenate 'string "/" (substitute #\/ #\. (jcall "getName" class)) ".class"))))
     `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
-      (:label "Path: ") (:value ,path) (:newline)
+      ,@(when path (list `(:label ,"Path: ") `(:value ,path) '(:newline)))
       ,@(if has-superclasses 
             (list* '(:label "Superclasses: ") (butlast (loop for super = (jclass-superclass class) then (jclass-superclass super)
                             while super collect (list :value super (jcall "getName" super)) collect ", "))))

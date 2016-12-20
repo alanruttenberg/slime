@@ -289,13 +289,7 @@
         (t :not-available)))
 
 (defimplementation function-name (function)
-  (or (nth-value 2 (function-lambda-expression function))
-      (let* ((class (#"getClass" function))
-             (loaded-from (sys::get-loaded-from function))
-             (name (#"replace" (#"getName" class) "org.armedbear.lisp." ""))
-             (where (and loaded-from (concatenate 'string (pathname-name loaded-from) "." (pathname-type loaded-from)))))
-        `(:anonymous-function ,name ,@(if (sys::arglist function)  (sys::arglist function)) 
-                              ,@(if where (list (list :from where)))))))
+  (sys::any-function-name function))
 
 (defimplementation macroexpand-all (form &optional env)
   (ext:macroexpand-all form env))
@@ -486,11 +480,9 @@
   ;;                    (unless (null rest) (write-char #\space stream)))
   ;;           (write-char #\) stream)))
   ;;     (write-string (sys:frame-to-string frame) stream)))
-
   (if (typep frame 'sys::lisp-stack-frame)
-      (princ (sys:frame-to-list frame) stream)
-      (write-string (sys:frame-to-string frame)
-                stream)))
+      (princ (system:frame-to-list frame) stream)
+      (write-string (sys:frame-to-string frame) stream)))
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403

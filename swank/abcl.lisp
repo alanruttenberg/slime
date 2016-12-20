@@ -521,19 +521,15 @@
 (defimplementation disassemble-frame (index)
   (sys::disassemble (frame-function (nth-frame index))))
 
-;;(disassemble (debugger:frame-function (nth-frame index))))
-
-;; (defun frame-function (frame)
-;;   (let ((list (sys::frame-to-list frame)))
-;;     (cond 
-;;       ((keywordp (car list))
-;;        (find (getf list :method) 
-;;              (jcall "getDeclaredMethods" (jclass (getf list :class)))
-;;              :key #"getName" :test 'equal))
-;;       (t (car list) ))))
+(defun frame-function (frame)
+  (let ((list (sys::frame-to-list frame)))
+    (cond 
+      ((keywordp (car list))
+       (find (getf list :method) 
+             (jcall "getDeclaredMethods" (jclass (getf list :class)))
+             :key #"getName" :test 'equal))
+      (t (car list) ))))
        
-;; ALANR:: ARGHH -- index isn't right
-
 (defimplementation frame-source-location (index)
   (let ((frame (nth-frame index)))
     (or (source-location (nth-frame index))
@@ -899,40 +895,42 @@
                  (when i-fun (push i-fun implementation-functions))))
     (setq sources (remove-duplicates sources :test 'equalp))
     (append (remove-duplicates implementation-functions :test 'equalp)
+            (mapcar (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
+            (remove-duplicates implementation-variables :test 'equalp))))
 
-           (loop for (what path pos) in sources
-                      ;; all of these are (defxxx forms, which is what :function locations look for in slime
-                      for isfunction = (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition)))
-                      for ismethod = (and (consp what) (eq (car what) :method))
-                      for <position> = (cond (isfunction (list :function-name (princ-to-string (second what))))
+(defun slime-location-from-source-annotation (sym it)
+  (destructuring-bind (what path pos) it
+    (let* (              ;; all of these are (defxxx forms, which is what :function locations look for in slime
+          (isfunction  (and (consp what) (member (car what) '(:function :generic-function :macro :class :compiler-macro :type :constant :variable :package :structure :condition))))
+          (ismethod (and (consp what) (eq (car what) :method)))
+          (<position> (cond (isfunction (list :function-name (princ-to-string (second what))))
                                              (ismethod (stringify-method-specs what))
-                                             (t (list :position (1+ (or pos 0)))))
-                      for path2 = (if (eq path :top-level)
-                                      "emacs-buffer:*slime-repl lsw*"
-                                      (maybe-redirect-to-jar path))
-                      collect
-                      (list (definition-specifier what)
-                            (if (ext:pathname-jar-p path2)
-                                `(:location
-                                  ;; strip off "jar:file:" = 9 characters
-                                  (:zip ,@(split-string (subseq path2 9) "!/"))
-                                  ;; pos never seems right. Use function name.
-                                  ,<position>
-                                  (:align t)
-                                  )
-                                ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
-                                (if (eql 0 (search "emacs-buffer:" path2))
-                                    `(:location
-                                      (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
-                                      ,<position>
-                                      (:align t)
-                                      )
-                                    `(:location
-                                      (:file ,path2)
-                                      ,<position>
-                                      (:align t)))
-                                )))
-           (remove-duplicates implementation-variables :test 'equalp))))
+                                             (t (list :position (1+ (or pos 0))))))
+          (path2 (if (eq path :top-level)
+                     "emacs-buffer:*slime-repl lsw*"
+                     (maybe-redirect-to-jar path))))
+      (when (atom what) (setq what (list what sym)))
+      (list (definition-specifier what)
+            (if (ext:pathname-jar-p path2)
+                `(:location
+                  ;; strip off "jar:file:" = 9 characters
+                  (:zip ,@(split-string (subseq path2 9) "!/"))
+                  ;; pos never seems right. Use function name.
+                  ,<position>
+                  (:align t)
+                  )
+                ;; conspire with swank-compile-string to keep the buffer name in a pathname whose device is "emacs-buffer".
+                (if (eql 0 (search "emacs-buffer:" path2))
+                    `(:location
+                      (:buffer ,(subseq path2  (load-time-value (length "emacs-buffer:"))))
+                      ,<position>
+                      (:align t)
+                      )
+                    `(:location
+                      (:file ,path2)
+                      ,<position>
+                      (:align t)))
+                )))))
 
 
 #|
@@ -963,6 +961,23 @@ part of *sysdep-pathnames* in swank.loader.lisp.
       (push (list symbol (source-location symbol)) xrefs))
     xrefs))
 |#
+
+
+(defimplementation list-callers (thing)
+  (loop for caller in (sys::callers thing)
+        when (typep caller 'method)
+          append (let ((name (mop:generic-function-name
+                              (mop:method-generic-function caller))))
+                   (mapcar (lambda(s) (slime-location-from-source-annotation thing s))
+                           (remove `(:method ,@(sys::method-spec-list caller))
+                                   (get 
+                                    (if (consp name) (second name) name)
+                                    'sys::source)
+                                   :key 'car :test-not 'equalp)))
+        when (symbolp caller)
+          append   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
+                           (get caller 'sys::source))))
+	     
 
 ;;;; Inspecting
 (defmethod emacs-inspect ((o t))
@@ -1003,20 +1018,25 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 (defmethod emacs-inspect ((f function))
   `(,@(when (function-name f)
             `((:label "Name: ")
-              ,(princ-to-string (function-name f)) (:newline)))
-      ,@(multiple-value-bind (args present)
-                             (sys::arglist f)
-                             (when present
-                               `((:label "Argument list: ")
-                                 ,(princ-to-string args) (:newline))))
-      (:newline)
-      #+nil,@(when (documentation f t)
+              ,(princ-to-string (sys::any-function-name f)) (:newline)))
+      ,@(multiple-value-bind (args present) (sys::arglist f)
+          (when present
+            `((:label "Argument list: ")
+              ,(princ-to-string args)
+              (:newline))))
+      ,@(when (documentation f t)
                    `("Documentation:" (:newline)
                                       ,(documentation f t) (:newline)))
       ,@(when (function-lambda-expression f)
               `((:label "Lambda expression:")
                 (:newline) ,(princ-to-string
                              (function-lambda-expression f)) (:newline)))
+      ,@(when (#"isInstance"  (java::jclass "org.armedbear.lisp.CompiledClosure") f)
+          `((:label "Closed over: ")
+            ,@(loop for el in (sys::compiled-closure-context f)
+                    collect `(:value ,el)
+                    collect " ")
+            (:newline)))
       ,@(when (sys::get-loaded-from f)
           (list `(:label "Defined in: ") `(:value ,(sys::get-loaded-from f) ,(namestring (sys::get-loaded-from f))) '(:newline))
           )
@@ -1027,7 +1047,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                          do (#"setAccessible" field t)
                          append
                          (let ((value (#"get" field f)))
-                           (list `(:label ,(#"getName" field)) ": " `(:value ,value ,(princ-to-string value)) '(:newline)))))))
+                           (list "  " `(:label ,(#"getName" field)) ": " `(:value ,value ,(princ-to-string value)) '(:newline)))))))
       ,@(when (and (function-name f) (symbolp (function-name f)) (eq (symbol-package (function-name f)) (find-package :cl)))
           (list '(:newline) (list :action "Lookup in hyperspec"
                       (lambda () (hyperspec-do (symbol-name (function-name f))))

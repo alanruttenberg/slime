@@ -8,6 +8,8 @@
 ;;; are disclaimed.
 ;;;
 
+(require :abcl-introspect)
+
 (defpackage swank/abcl
   (:use cl swank/backend)
   (:import-from :java #:jcall #:jstatic #:jmethod #:jfield
@@ -230,37 +232,7 @@
 ;;;; Unix signals
 
 (defimplementation getpid ()
-  (handler-case
-      (let* ((runtime
-              (jstatic "getRuntime" "java.lang.Runtime"))
-             (command
-              (jnew-array-from-array
-               "java.lang.String" #("sh" "-c" "echo $PPID")))
-             (runtime-exec-jmethod
-              ;; Complicated because java.lang.Runtime.exec() is
-              ;; overloaded on a non-primitive type (array of
-              ;; java.lang.String), so we have to use the actual
-              ;; parameter instance to get java.lang.Class
-              (jmethod "java.lang.Runtime" "exec"
-                            (jcall
-                             (jmethod "java.lang.Object" "getClass")
-                             command)))
-             (process
-              (jcall runtime-exec-jmethod runtime command))
-             (output
-              (jcall (jmethod "java.lang.Process" "getInputStream")
-                          process)))
-         (jcall (jmethod "java.lang.Process" "waitFor")
-                     process)
-	 (loop :with b :do
-	    (setq b
-		  (jcall (jmethod "java.io.InputStream" "read")
-			      output))
-	    :until (member b '(-1 #x0a))	; Either EOF or LF
-	    :collecting (code-char b) :into result
-	    :finally (return
-		       (parse-integer (coerce result 'string)))))
-    (t () 0)))
+  (sys::get-pid))
 
 (defimplementation lisp-implementation-type-name ()
   "armedbear")
@@ -487,7 +459,7 @@
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403
 (defun nth-frame-list (index)
-  (jcall "toLispList" (nth-frame index)))
+  (jcall "toLispList" (setq @ (nth-frame index))))
 
 (defun match-lambda (operator values)
   (jvm::match-lambda-list
@@ -981,14 +953,56 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 
 ;;;; Inspecting
 (defmethod emacs-inspect ((o t))
-  (let ((parts (sys:inspected-parts o)))
-    `("The object is of type " ,(symbol-name (type-of o)) "." (:newline)
-      ,@(if parts
-           (loop :for (label . value) :in parts
-              :appending (list (list :label (string-capitalize label)) ": " (list :value value (princ-to-string value)) '(:newline)))
-           (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
-                 '(:newline)
-                 (with-output-to-string (desc) (describe o desc)))))))
+  (let* ((type (type-of o))
+         (class (ignore-errors (find-class type)))
+         (jclass (and (typep  class 'sys::built-in-class)
+                      (#"getClass" o))))
+    (let ((parts (sys:inspected-parts o)))
+      `((:label "Type: ") (:value ,(or class type)) (:Newline)
+        ,@(if jclass 
+              `((:label "Java type: ") (:value ,jclass) (:newline)))
+        ,@(if parts
+              (loop :for (label . value) :in parts
+                    :appending (list (list :label (string-capitalize label)) ": " (list :value value (princ-to-string value)) '(:newline)))
+              (list '(:label "No inspectable parts, dumping output of CL:DESCRIBE:")
+                    '(:newline)
+                    (with-output-to-string (desc) (describe o desc))))))))
+
+(defmethod emacs-inspect ((string string))
+  (swank::lcons* 
+   '(:label "Value: ")  `(:value ,string ,(concatenate 'string "\"" string "\""))  '(:newline)
+   `(:action "[Edit in emacs buffer]" ,(lambda() (swank::ed-in-emacs `(:string ,string))))
+   '(:newline)
+   (if (ignore-errors (jclass string))
+       `(:line "Names java class" ,(jclass string))
+       "")
+   (if (and (jss-p) 
+            (stringp (jss::lookup-class-name string :return-ambiguous t :muffle-warning t)))
+       `(:multiple
+         (:label "Abbreviates java class: ")
+         ,(let ((it (jss::lookup-class-name string :return-ambiguous t :muffle-warning t)))
+           `(:value ,(jclass it)))
+         (:newline))
+       "")
+   (if (ignore-errors (find-package (string-upcase string)))
+       `(:line "Names package" ,(find-package (string-upcase string)))
+       "")
+   (let ((symbols (loop for p in (list-all-packages)
+                        for found = (find-symbol (string-upcase string))
+                        when (and found (eq (symbol-package found) p)
+                                  (or (fboundp found)
+                                      (boundp found)
+                                      (symbol-plist found)
+                                      (ignore-errors (find-class found))))
+                          collect found)))
+     (if symbols
+         `(:multiple (:label "Names symbols: ") 
+                     ,@(loop for s in symbols
+                             collect
+                             (Let ((*package* (find-package :keyword))) 
+                               `(:value ,s ,(prin1-to-string s))) collect " ") (:newline))
+         ""))
+   (call-next-method)))
 
 (defmethod emacs-inspect ((o java:java-exception))
   (append (call-next-method)
@@ -1031,6 +1045,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
               `((:label "Lambda expression:")
                 (:newline) ,(princ-to-string
                              (function-lambda-expression f)) (:newline)))
+      (:label "Function java class: ") (:value ,(#"getClass" f)) (:newline)
       ,@(when (#"isInstance"  (java::jclass "org.armedbear.lisp.CompiledClosure") f)
           `((:label "Closed over: ")
             ,@(loop for el in (sys::compiled-closure-context f)

@@ -663,6 +663,7 @@
   (or (loop for spec in  sources
             for (dspec) = spec
             when (and (consp dspec) (eq (car dspec) :function))
+            when (and (consp dspec) (member (car dspec) '(:swank-implementation :function)))
                  do (return-from if-we-have-to-choose-one-choose-the-function spec))
       (car sources)))
     
@@ -1288,3 +1289,18 @@ part of *sysdep-pathnames* in swank.loader.lisp.
 #+#.(swank/backend:with-symbol 'package-local-nicknames 'ext)
 (defimplementation package-local-nicknames (package)
   (ext:package-local-nicknames package))
+
+;; all the defimplentations aren't compiled. Compile them. Set their
+;; function name to be the same as the implementation name so
+;; meta-. works.
+
+(eval-when (:load-toplevel :execute)
+  (loop for s in swank-backend::*interface-functions*
+        for impl = (get s 'swank-backend::implementation)
+        do (when (and impl (not (compiled-function-p impl)))
+             (let ((name (gensym)))
+               (compile name  impl)
+               (let ((compiled (symbol-function name)))
+                 (system::%set-lambda-name compiled (second (sys::lambda-name impl)))
+                 (setf (get s 'swank-backend::implementation) compiled))))))
+

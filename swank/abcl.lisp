@@ -424,36 +424,37 @@
 (defun jss-p ()
   (and (member "JSS" *modules* :test 'string=) (intern "INVOKE-RESTARGS" "JSS")))
           
-;; maybe we can avoid this by instead of doing unexpand-jss-in-frame, we look for the pattern at print time.
 (defun matches-jss-call (form)
   (flet ((gensymp (s) (and (symbolp s) (null (symbol-package s))))
          (invokep (s)  (and (symbolp s) (eq s (jss-p)))))
-    (let ((method 
+    (let ((method
             (swank/match::select-match 
              form
              (((LAMBDA ((#'gensymp a) &REST (#'gensymp b)) 
                  ((#'invokep fun) (#'stringp c) (#'gensymp d) (#'gensymp e) . args)) . args) '=> c)
-            (other nil))))
+             (other nil))))
       method)))
 
+;; Use princ cs write-string for lisp frames as it respects (print-object (function t))
+;; Rewrite jss expansions to their unexpanded state
 (defimplementation print-frame (frame stream)
-  ;; (if (typep frame 'sys::lisp-stack-frame)
-  ;;     (if (not (jss-p))
-  ;;         (write-string (sys:frame-to-string frame) stream)
-  ;;         (progn
-  ;;           (write-char #\( stream) 
-  ;;           (loop for (el . rest) on (sys::frame-to-list frame)
-  ;;                 for method =  (swank/abcl::matches-jss-call el)
-  ;;                 do
-  ;;                    (cond (method 
-  ;;                           (format stream "(#~s ~{~s~^~})" method (cdr el)))
-  ;;                           (t
-  ;;                            (prin1 el stream)))
-  ;;                    (unless (null rest) (write-char #\space stream)))
-  ;;           (write-char #\) stream)))
-  ;;     (write-string (sys:frame-to-string frame) stream)))
   (if (typep frame 'sys::lisp-stack-frame)
-      (princ (system:frame-to-list frame) stream)
+      (if (not (jss-p))
+          (princ (system:frame-to-list frame) stream)
+          ;; rewrite jss forms as they would be written
+          (let ((form (system:frame-to-list frame)))
+            (if (eq (car form) (jss-p))
+                (format stream "(#~s ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
+                (loop initially  (write-char #\( stream)
+                      for (el . rest) on form
+                      for method =  (swank/abcl::matches-jss-call el)
+                      do
+                         (cond (method 
+                                (format stream "(#~s ~{~s~^~})" method (cdr el)))
+                               (t
+                                (prin1 el stream)))
+                         (unless (null rest) (write-char #\space stream))
+                      finally (write-char #\) stream)))))
       (write-string (sys:frame-to-string frame) stream)))
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
@@ -469,7 +470,7 @@
 
 (defimplementation frame-locals (index)
   (let ((frame (nth-frame index)))
-    (if (typep frame 'sys::lisp-stack-frame)
+    (if (typep frame 'sys::lisp-stack-frame) ;; java stack frames have no locals available
         (loop
           :for id :upfrom 0
           :with frame = (nth-frame-list index)
@@ -500,7 +501,7 @@
       ((keywordp (car list))
        (find (getf list :method) 
              (jcall "getDeclaredMethods" (jclass (getf list :class)))
-             :key #"getName" :test 'equal))
+             :key (lambda(e)(jcall "getName" e)) :test 'equal))
       (t (car list) ))))
        
 (defimplementation frame-source-location (index)
@@ -528,6 +529,7 @@
   (let ((frame (nth-frame frame-number)))
     (debugger:frame-retry frame (debugger:frame-function frame))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Compiler hooks
 
 (defvar *buffer-name* nil)
@@ -591,6 +593,9 @@
         (funcall (compile nil (read-from-string
                                (format nil "(~S () ~A)" 'lambda string))))
         t))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; source location and users of it
 
 (defgeneric source-location (object))
 
@@ -670,6 +675,8 @@
 (defmethod source-location ((symbol symbol))
   (or (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
         (and maybe (second (slime-location-from-source-annotation symbol maybe))))
+      ;; This below should be obsolete - it uses the old sys:%source
+      ;; leave it here for now just in case
       (and (pathnamep (ext:source-pathname symbol))
            (let ((pos (ext:source-file-position symbol))
                  (path (namestring (ext:source-pathname symbol))))
@@ -801,12 +808,6 @@
            (loop for dir in path
                  if (try dir) return it)))))
 
-#+nil
-(defimplementation find-definitions (symbol)
-  (ext:resolve symbol)
-  (let ((srcloc (source-location symbol)))
-    (and srcloc `((,symbol ,srcloc)))))
-
 (defparameter *definition-types*
   '(:variable defvar
     :constant defconstant
@@ -919,37 +920,6 @@
                       (:align t)))
                 )))))
 
-
-#|
-Uncomment this if you have patched xref.lisp, as in
-http://article.gmane.org/gmane.lisp.slime.devel/2425
-Also, make sure that xref.lisp is loaded by modifying the armedbear
-part of *sysdep-pathnames* in swank.loader.lisp.
-;; alanr: (loop for file in  (directory  "/Users/lori/repos/abcl/src/org/armedbear/lisp/*.lisp") do (ignore-errors (pxref::XREF-FILE file nil)))
-;; Maybe https://mailman.common-lisp.net/pipermail/slime-devel/2004-August/002217.html
-
-;;;; XREF
-(setq pxref:*handle-package-forms* '(cl:in-package))
-
-(defmacro defxref (name function)
-  `(defimplementation ,name (name)
-    (xref-results (,function name))))
-
-(defxref who-calls      pxref:list-callers)
-(defxref who-references pxref:list-readers)
-(defxref who-binds      pxref:list-setters)
-(defxref who-sets       pxref:list-setters)
-(defxref list-callers   pxref:list-callers)
-(defxref list-callees   pxref:list-callees)
-
-(defun xref-results (symbols)
-  (let ((xrefs '()))
-    (dolist (symbol symbols)
-      (push (list symbol (source-location symbol)) xrefs))
-    xrefs))
-|#
-
-
 (defimplementation list-callers (thing)
   (loop for caller in (sys::callers thing)
         when (typep caller 'method)
@@ -964,14 +934,32 @@ part of *sysdep-pathnames* in swank.loader.lisp.
         when (symbolp caller)
           append   (mapcar (lambda(s) (slime-location-from-source-annotation caller s))
                            (get caller 'sys::source))))
-	     
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Inspecting
+
+(defvar *slime-inspector-hyperspec-in-browser* t
+  "If t then invoking hyperspec within the inspector browses the hyperspec in an emacs buffer, otherwise respecting the value of browse-url-browser-function")
+
+(defun hyperspec-do (name)
+  (let ((form `(let ((browse-url-browser-function 
+                       ,(if *slime-inspector-hyperspec-in-browser* 
+                            '(lambda(a v) (eww a))
+                            'browse-url-browser-function)))
+                        (slime-hyperdoc-lookup ,name))))
+    (swank::eval-in-emacs form t)))
+
+;;; Although by convention toString() is supposed to be a
+;;; non-computationally expensive operation this isn't always the
+;;; case, so make its computation a user interaction.
+(defparameter *to-string-hashtable* (make-hash-table))
+
+
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
          (class (ignore-errors (find-class type)))
          (jclass (and (typep  class 'sys::built-in-class)
-                      (#"getClass" o))))
+                      (jcall "getClass" o))))
     (let ((parts (sys:inspected-parts o)))
       `((:label "Type: ") (:value ,(or class type)) (:Newline)
         ,@(if jclass 
@@ -1060,8 +1048,8 @@ part of *sysdep-pathnames* in swank.loader.lisp.
               `((:label "Lambda expression:")
                 (:newline) ,(princ-to-string
                              (function-lambda-expression f)) (:newline)))
-      (:label "Function java class: ") (:value ,(#"getClass" f)) (:newline)
-      ,@(when (#"isInstance"  (java::jclass "org.armedbear.lisp.CompiledClosure") f)
+      (:label "Function java class: ") (:value ,(jcall "getClass" f)) (:newline)
+      ,@(when (jcall "isInstance"  (java::jclass "org.armedbear.lisp.CompiledClosure") f)
           `((:label "Closed over: ")
             ,@(loop for el in (sys::compiled-closure-context f)
                     collect `(:value ,el)
@@ -1070,14 +1058,14 @@ part of *sysdep-pathnames* in swank.loader.lisp.
       ,@(when (sys::get-loaded-from f)
           (list `(:label "Defined in: ") `(:value ,(sys::get-loaded-from f) ,(namestring (sys::get-loaded-from f))) '(:newline))
           )
-      ,@(let ((fields (#"getDeclaredFields" (#"getClass" f))))
+      ,@(let ((fields (jcall "getDeclaredFields" (jcall "getClass" f))))
           (when (plusp (length fields))
             (list* '(:label "Internal fields: ") '(:newline)
                    (loop for field across fields
-                         do (#"setAccessible" field t)
+                         do (jcall "setAccessible" field t)
                          append
-                         (let ((value (#"get" field f)))
-                           (list "  " `(:label ,(#"getName" field)) ": " `(:value ,value ,(princ-to-string value)) '(:newline)))))))
+                         (let ((value (jcall "get" field f)))
+                           (list "  " `(:label ,(jcall "getName" field)) ": " `(:value ,value ,(princ-to-string value)) '(:newline)))))))
       ,@(when (and (function-name f) (symbolp (function-name f)) (eq (symbol-package (function-name f)) (find-package :cl)))
           (list '(:newline) (list :action "Lookup in hyperspec"
                       (lambda () (hyperspec-do (symbol-name (function-name f))))
@@ -1085,23 +1073,6 @@ part of *sysdep-pathnames* in swank.loader.lisp.
                       )
                 '(:newline)))
       ))
-
-(defvar *slime-inspector-hyperspec-in-browser* t
-  "If t then invoking hyperspec within the inspector browses the hyperspec in an emacs buffer, otherwise respecting the value of browse-url-browser-function")
-
-(defun hyperspec-do (name)
-  (let ((form `(let ((browse-url-browser-function 
-                       ,(if *slime-inspector-hyperspec-in-browser* 
-                            '(lambda(a v) (eww a))
-                            'browse-url-browser-function)))
-                        (slime-hyperdoc-lookup ,name))))
-    (swank::eval-in-emacs form t)))
-
-;;; Although by convention toString() is supposed to be a
-;;; non-computationally expensive operation this isn't always the
-;;; case, so make its computation a user interaction.
-(defparameter *to-string-hashtable* (make-hash-table))
-
 
 (defmethod emacs-inspect ((o java:java-object))
   (if (jinstance-of-p o (jclass "java.lang.Class"))
@@ -1143,7 +1114,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
   (loop for super = class then (jclass-superclass super)
         while super
         for fields = (jcall "getDeclaredFields" super)
-        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(#"getName" super)) '(:newline))
+        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
         when (and (plusp (length fields)) fromline)
           append fromline
         append
@@ -1160,7 +1131,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
    (loop for super = class then (jclass-superclass super)
         while super
         for methods = (jcall "getDeclaredMethods" super)
-        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(#"getName" super)) '(:newline))
+        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
         when (and (plusp (length methods)) fromline) append fromline
         append
         (loop for this across methods
@@ -1199,6 +1170,7 @@ part of *sysdep-pathnames* in swank.loader.lisp.
              '(:newline) '(:label "Fields:") '(:newline)
              fields)))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Multithreading
 
 (defimplementation spawn (fn &key name)

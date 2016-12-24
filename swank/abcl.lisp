@@ -468,24 +468,25 @@
    values))
 
 (defimplementation frame-locals (index)
-  (loop
-     :for id :upfrom 0
-     :with frame = (nth-frame-list index)
-     :with operator = (first frame)
-     :with values = (rest frame)
-     :with arglist = (if (and operator (consp values) (not (null values)))
-                         (handler-case
-                             (match-lambda operator values)
-                           (jvm::lambda-list-mismatch (e)
-                             :lambda-list-mismatch))
-                         :not-available)
-     :for value :in values
-     :collecting (list
-                  :name (if (not (keywordp arglist))
-                            (first (nth id arglist))
-                            (format nil "arg~A" id))
-                  :id id
-                  :value value)))
+  (let ((frame (nth-frame index)))
+    (if (typep frame 'sys::lisp-stack-frame)
+        (loop
+          :for id :upfrom 0
+          :with frame = (nth-frame-list index)
+          :with operator = (first frame)
+          :with values = (rest frame)
+          :with arglist = (if (and operator (consp values) (not (null values)))
+                              (handler-case (match-lambda operator values)
+                                (jvm::lambda-list-mismatch (e) (declare(ignore e))
+                                  :lambda-list-mismatch))
+                              :not-available)
+          :for value :in values
+          :collecting (list
+                       :name (if (not (keywordp arglist))
+                                 (first (nth id arglist))
+                                 (format nil "arg~A" id))
+                       :id id
+                       :value value)))))
 
 (defimplementation frame-var-value (index id)
   (elt (rest (jcall "toLispList" (nth-frame index))) id))
@@ -615,7 +616,7 @@
                    (found-in-source-path (find-file-in-path java-path *source-path*))) 
               ;; snippet for finding the internal class within the file
               (if found-in-source-path 
-                  `(,(format nil "(primitive ~a)" local)
+                  `((:primitive , local)
                     (:location ,found-in-source-path
                                (:line 0)
                                (:snippet ,(format nil "class ~a" local))))
@@ -662,35 +663,39 @@
   (or (loop for spec in  sources
             for (dspec) = spec
             when (and (consp dspec) (member (car dspec) '(:swank-implementation :function)))
-                 do (return-from if-we-have-to-choose-one-choose-the-function spec))
+                   do (return-from if-we-have-to-choose-one-choose-the-function spec))
       (car sources)))
     
 (defmethod source-location ((symbol symbol))
-  (or (implementation-source-location symbol)
-      (when (pathnamep (ext:source-pathname symbol))
-        (let ((pos (ext:source-file-position symbol))
-              (path (namestring (ext:source-pathname symbol))))
-          (cond ((ext:pathname-jar-p path)
-                 `(:location
-                   ;; strip off "jar:file:" = 9 characters
-                   (:zip ,@(split-string (subseq path 9) "!/"))
-                   ;; pos never seems right. Use function name.
-                   (:function-name ,(string symbol))
-                   (:align t)))
-                ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-                 ;; conspire with swank-compile-string to keep the buffer
-                 ;; name in a pathname whose device is "emacs-buffer".
-                 `(:location
-                   (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                   (:function-name ,(string symbol))
-                   (:align t)))
-                (t
-                 `(:location
-                   (:file ,path)
-                   ,(if pos
-                        (list :position (1+ pos))
-                        (list :function-name (string symbol)))
-                   (:align t))))))))
+  (or (let ((maybe (if-we-have-to-choose-one-choose-the-function (get symbol 'sys::source))))
+        (and maybe (second (slime-location-from-source-annotation symbol maybe))))
+      (and (pathnamep (ext:source-pathname symbol))
+           (let ((pos (ext:source-file-position symbol))
+                 (path (namestring (ext:source-pathname symbol))))
+             ; boot.lisp gets recorded wrong
+             (if (equal path "boot.lisp") (setq path (second (find-file-in-path "org/armedbear/lisp/boot.lisp" *source-path*))))
+             (cond ((ext:pathname-jar-p path)
+                    `(:location
+                      ;; strip off "jar:file:" = 9 characters
+                      (:zip ,@(split-string (subseq path 9) "!/"))
+                      ;; pos never seems right. Use function name.
+                      (:function-name ,(string symbol))
+                      (:align t)))
+                   ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
+                    ;; conspire with swank-compile-string to keep the buffer
+                    ;; name in a pathname whose device is "emacs-buffer".
+                    `(:location
+                      (:buffer ,(pathname-name (ext:source-pathname symbol)))
+                      (:function-name ,(string symbol))
+                      (:align t)))
+                   (t
+                    `(:location
+                      (:file ,path)
+                      ,(if pos
+                           (list :position (1+ pos))
+                           (list :function-name (string symbol)))
+                      (:align t))))))
+      (second (implementation-source-location symbol))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -712,8 +717,10 @@
       (symbol (source-location operator)))))
 
 (defmethod source-location ((fun function))
-  (let ((name (function-name fun)))
-    (and name (source-location name))))
+  (if (sys::local-function-p fun)
+      (source-location (sys::local-function-owner fun))
+      (let ((name (function-name fun)))
+        (and name (source-location name)))))
 
 (defun system-property (name)
   (jstatic "getProperty" "java.lang.System" name))

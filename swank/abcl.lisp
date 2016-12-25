@@ -3,6 +3,7 @@
 ;;; swank-abcl.lisp --- Armedbear CL specific code for SLIME.
 ;;;
 ;;; Adapted from swank-acl.lisp, Andras Simon, 2004
+;;; New work by Alan Ruttenberg, 2016
 ;;;
 ;;; This code has been placed in the Public Domain.  All warranties
 ;;; are disclaimed.
@@ -12,7 +13,7 @@
 
 (defpackage swank/abcl
   (:use cl swank/backend)
-  (:import-from :java #:jcall #:jstatic #:jmethod #:jfield
+  (:import-from :java #:jcall #:jstatic #:jmethod #:jfield #:jfield-name
   #:jconstructor #:jnew-array #:jarray-length #:jarray-ref
   #:jnew-array-from-array #:jclass #:jnew
   #:jinstance-of-p #:jclass-superclass #:java-object #:jclass-interfaces #:java-exception
@@ -349,69 +350,9 @@
                                  (first (sys:frame-to-list frame)))))))
     (funcall debugger-loop-fn)))
 
-(defvar *aggressive-backtrace-trim* nil)
-
-;; *aggressive-backtrace-trim* causes nth-frame to get wrong index sometimes :-(
-
 (defun backtrace (start end)
   "A backtrace without initial SWANK frames."
   (let ((backtrace (sys:backtrace)))
-;;     (if *aggressive-backtrace-trim*
-;;         (setq backtrace (remove-if 'noise-frame-p backtrace)))
-;;     (backtrace-trim-sldb-internals 
-;;      (subseq (or (member *sldb-topframe* backtrace) backtrace)
-;;              start end))))
-
-
-;; ;; and maybe this should all be done on the slime side (probably not because we've already rendered to string)
-;; (defun noise-frame-p (frame)
-;;   (and *aggressive-backtrace-trim*
-;;        (or
-;;         (and (typep frame 'sys::java-stack-frame )
-;;              (member (getf (sys::frame-to-list frame) :method) '("jstatic" "error" "execute") :test 'equal)
-;;              )
-;;         (and (typep frame 'sys::lisp-stack-frame)
-;;              (let ((frame (sys::frame-to-list frame)))
-;;                (or 
-;;                 (and
-;;                  (symbolp (car frame))
-;;                  (or 
-;;                   (null '(member (package-name (symbol-package (car frame)))
-;;                           '("SWANK" "SWANK-REPL" "SWANK/BACKEND")
-;;                           :test 'equal))
-;;                   (and (eq (car frame) 'apply)
-;;                        (eq (second frame) #'jstatic))))
-;;                 (and (functionp (car frame))
-;;                      (null (cdr frame))
-;;                      (null (FUNCTION-NAME (car frame))))
-;;                 (and (eq (car frame) 'funcall)
-;;                      (functionp (second frame))
-;;                      (null (cddr frame))
-;;                      (null (FUNCTION-NAME (second frame))))))
-;;              ))))
-
-;; (defun backtrace-trim-sldb-internals (backtrace)
-;;   (if (not *aggressive-backtrace-trim*) ;; ALANR::FIXME. nth-frame fails if we do this. er still fails. Presumably noise-p. Problem is that my messing with the backtrace somehow gets nth-frame called with the wrong index. 
-;;       backtrace
-;;       (let ((pos (position-if (lambda(f) 
-;;                                 (and (typep f 'sys::lisp-stack-frame)
-;;                                      (let ((frame (sys::frame-to-list f)))
-;;                                        (eq (car frame) 'SYSTEM::RUN-HOOK)
-;;                                        (eq (second frame) 'SYSTEM::*INVOKE-DEBUGGER-HOOK*))))
-;;                               backtrace)))
-;;         (setq backtrace (if pos (subseq backtrace (1+ pos)) backtrace))
-;;         (let ((pos (position-if
-;;                     (lambda(f) 
-;;                       (and (typep f 'sys::lisp-stack-frame)
-;;                            (let ((frame (sys::frame-to-list f)))
-;;                              (and
-;;                               (eq (car frame) 'SYSTEM::%EVAL)
-;;                               (consp (second frame))
-;;                               (eq (car (second frame)) (intern "LISTENER-EVAL" "SWANK-REPL"))))))
-;;                     backtrace)))
-;;           (if pos (subseq backtrace 0 pos) backtrace)))))
-
-;; =======
     (subseq (or (member *sldb-topframe* backtrace) backtrace)
             start end)))
 (defun nth-frame (index)
@@ -636,6 +577,9 @@
                     (if class-in-source-path `(:primitive (:location ,class-in-source-path (:line 0) nil)))
                     ))))))))))
 
+(defun get-declared-field (class fieldname)
+  (find fieldname (jcall "getDeclaredFields" class) :key 'jfield-name :test 'equal))
+
 (defun symbol-defined-in-java (symbol)
   (loop  with internal-name1 = (jcall "replaceAll" (jcall "replaceAll" (string symbol) "\\*" "") "-" "_")
          with internal-name2 = (jcall "replaceAll" (jcall "replaceAll" (string symbol) "\\*" "_") "-" "_")
@@ -651,8 +595,8 @@
                                        "org.armedbear.lisp.Pathname"
                                        "org.armedbear.lisp.Site")))
            thereis 
-           (or (jss::get-declared-field class internal-name1)
-               (jss::get-declared-field class internal-name2))))
+           (or (get-declared-field class internal-name1)
+               (get-declared-field class internal-name2))))
 
 (defun maybe-implementation-variable (s)
   (let ((field (symbol-defined-in-java s)))
@@ -980,10 +924,10 @@
        `(:line "Names java class" ,(jclass string))
        "")
    (if (and (jss-p) 
-            (stringp (jss::lookup-class-name string :return-ambiguous t :muffle-warning t)))
+            (stringp (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t)))
        `(:multiple
          (:label "Abbreviates java class: ")
-         ,(let ((it (jss::lookup-class-name string :return-ambiguous t :muffle-warning t)))
+         ,(let ((it (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t)))
            `(:value ,(jclass it)))
          (:newline))
        "")

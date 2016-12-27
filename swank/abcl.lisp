@@ -9,6 +9,7 @@
 ;;; are disclaimed.
 ;;;
 
+(require :abcl-contrib)
 (require :abcl-introspect)
 
 (defpackage swank/abcl

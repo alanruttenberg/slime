@@ -397,7 +397,10 @@
                                 (prin1 el stream)))
                          (unless (null rest) (write-char #\space stream))
                       finally (write-char #\) stream)))))
-      (write-string (sys:frame-to-string frame) stream)))
+      (let ((classname (getf (sys:frame-to-list frame) :class)))
+        (if (and classname (sys::java-class-lisp-function classname))
+            (format stream "(~a ...)" (sys::java-class-lisp-function classname))
+            (write-string (sys:frame-to-string frame) stream)))))
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403

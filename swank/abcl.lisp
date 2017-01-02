@@ -11,6 +11,7 @@
 
 (require :abcl-contrib)
 (require :abcl-introspect)
+(require :stacktrace)
 
 (defpackage swank/abcl
   (:use cl swank/backend)
@@ -234,7 +235,7 @@
 ;;;; Unix signals
 
 (defimplementation getpid ()
-  (sys::get-pid))
+  (ext::get-pid))
 
 (defimplementation lisp-implementation-type-name ()
   "armedbear")
@@ -322,15 +323,19 @@
 ;;;; Debugger
 
 ;; Copied from swank-sbcl.lisp.
-;;
+(defvar sys::*caught-frames*)
+
 ;; Notice that *INVOKE-DEBUGGER-HOOK* is tried before *DEBUGGER-HOOK*,
 ;; so we have to make sure that the latter gets run when it was
 ;; established locally by a user (i.e. changed meanwhile.)
 (defun make-invoke-debugger-hook (hook)
   (lambda (condition old-hook)
-    (if *debugger-hook*
-        (funcall *debugger-hook* condition old-hook)
-        (funcall hook condition old-hook))))
+    (prog1 (let ((sys::*caught-frames* nil))
+             (let ((sys::*saved-backtrace* (if (fboundp 'sys::new-backtrace) (sys::new-backtrace condition) (sys::backtrace))))
+               (if *debugger-hook*
+                   (funcall *debugger-hook* condition old-hook)
+                   (funcall hook condition old-hook)))
+             ))))
 
 (defimplementation call-with-debugger-hook (hook fun)
   (let ((*debugger-hook* hook)
@@ -343,19 +348,23 @@
 
 (defvar *sldb-topframe*)
 
+;; with new backtrace magic-token won't appear in the backtrace
 (defimplementation call-with-debugging-environment (debugger-loop-fn)
   (let* ((magic-token (intern "SWANK-DEBUGGER-HOOK" 'swank))
-         (*sldb-topframe*
-          (second (member magic-token (sys:backtrace)
-                          :key (lambda (frame)
-                                 (first (sys:frame-to-list frame)))))))
+         (*sldb-topframe* 
+           (or
+            (second (member magic-token sys::*saved-backtrace* ;(sys:backtrace)
+                            :key (lambda (frame)
+                                   (first (sys:frame-to-list frame)))))
+            (car sys::*saved-backtrace*))))
     (funcall debugger-loop-fn)))
 
 (defun backtrace (start end)
   "A backtrace without initial SWANK frames."
-  (let ((backtrace (sys:backtrace)))
-    (subseq (or (member *sldb-topframe* backtrace) backtrace)
-            start end)))
+  (let ((backtrace sys::*saved-backtrace*))
+    (subseq (or (member *sldb-topframe* backtrace) backtrace) start end)
+    ))
+
 (defun nth-frame (index)
   (nth index (backtrace 0 nil)))
 
@@ -380,27 +389,31 @@
 ;; Use princ cs write-string for lisp frames as it respects (print-object (function t))
 ;; Rewrite jss expansions to their unexpanded state
 (defimplementation print-frame (frame stream)
-  (if (typep frame 'sys::lisp-stack-frame)
-      (if (not (jss-p))
-          (princ (system:frame-to-list frame) stream)
-          ;; rewrite jss forms as they would be written
-          (let ((form (system:frame-to-list frame)))
-            (if (eq (car form) (jss-p))
-                (format stream "(#~s ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
-                (loop initially  (write-char #\( stream)
-                      for (el . rest) on form
-                      for method =  (swank/abcl::matches-jss-call el)
-                      do
-                         (cond (method 
-                                (format stream "(#~s ~{~s~^~})" method (cdr el)))
-                               (t
-                                (prin1 el stream)))
-                         (unless (null rest) (write-char #\space stream))
-                      finally (write-char #\) stream)))))
-      (let ((classname (getf (sys:frame-to-list frame) :class)))
-        (if (and classname (sys::java-class-lisp-function classname))
-            (format stream "(~a ...)" (sys::java-class-lisp-function classname))
-            (write-string (sys:frame-to-string frame) stream)))))
+  (let ((*package* (find-package 'cl))) ;; make clear which functions aren't common lisp. Otherwise uses default package, which is invisible
+    (if (typep frame 'sys::lisp-stack-frame)
+        (if (not (jss-p))
+            (princ (system:frame-to-list frame) stream)
+            ;; rewrite jss forms as they would be written
+            (let ((form (system:frame-to-list frame)))
+              (if (eq (car form) (jss-p))
+                  (format stream "(#\"~s\" ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
+                  (loop initially  (write-char #\( stream)
+                        for (el . rest) on form
+                        for method =  (swank/abcl::matches-jss-call el)
+                        do
+                           (cond (method 
+                                  (format stream "(#~s ~{~s~^~})" method (cdr el)))
+                                 (t
+                                  (prin1 el stream)))
+                           (unless (null rest) (write-char #\space stream))
+                        finally (write-char #\) stream)))))
+        (let ((classname (getf (sys:frame-to-list frame) :class)))
+          (if (and (fboundp 'sys::javaframe) (member (sys::javaframe frame) sys::*caught-frames* :test 'equal))
+              (write-string "! " stream))
+          (write-string (sys:frame-to-string frame) stream)
+          (if (and classname (sys::java-class-lisp-function classname))
+              (format stream " = ~a" (sys::java-class-lisp-function classname))
+              )))))
 
 ;;; Sorry, but can't seem to declare DEFIMPLEMENTATION under FLET.
 ;;; --ME 20150403

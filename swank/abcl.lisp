@@ -396,7 +396,7 @@
             ;; rewrite jss forms as they would be written
             (let ((form (system:frame-to-list frame)))
               (if (eq (car form) (jss-p))
-                  (format stream "(#\"~s\" ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
+                  (format stream "(#~s ~{~s~^~})" (second form) (list* (third  form) (fourth form)))
                   (loop initially  (write-char #\( stream)
                         for (el . rest) on form
                         for method =  (swank/abcl::matches-jss-call el)

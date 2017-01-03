@@ -1,7 +1,5 @@
 (in-package :swank)
 
-#+abcl (require "JSS")
-
 (defun format-allsymbols-completion-set (symbols package-name)
   "Format a set of completion strings. Returns a list of strings with package qualifiers if needed."
   (let ((this (find-package (read-from-string package-name))))
@@ -10,9 +8,9 @@
 		(string-downcase 
 		 (if (or (eq sym symbol) (eq (symbol-package sym) (symbol-package symbol)))
 		     (string symbol)
-		     (if (keywordp sym)
+		     (if (keywordp symbol)
 			 (cat ":" (string symbol))
-			 (untokenize-symbol (package-name (symbol-package symbol)) internal-p (string symbol)))))))
+			 (untokenize-symbol (package-name (symbol-package symbol)) t (string symbol)))))))
 	    symbols)))
 
 (defslimefun allsymbol-completions (string package-name)
@@ -34,12 +32,15 @@
 
 #+:abcl
 (defun abcl-find-candidates (string package-name &aux results)
+  (declare (ignore package-name))
   (declare (optimize (speed 3) (safety 0)))
   (let ((pattern (java:jstatic "compile" (java:jclass "java.util.regex.Pattern") (concatenate 'string "(?i)^" (java:jstatic "quote" (java:jclass "java.util.regex.Pattern") string) ".*"))))
-    (jss::with-constant-signature ((matcher "matcher") (matches "matches"))
+    (let ((matcher (java::jmethod  "java.util.regex.Pattern" "matcher" "java.lang.CharSequence"))
+	  (matches (java::jmethod "java.util.regex.Matcher" "matches" )))
       (do-all-symbols (s )
-	(when (matches (matcher pattern (string s)))
-	  (push s results))))
+	(when (java::jcall matches (java::jcall matcher pattern (string s)))
+	  (push s results)))
+      )
     results))
 
 #-:abcl

@@ -13,7 +13,7 @@
   (:on-unload (slime-allsymbols-company--disable))
   )
 
-;; doesn't like to be calle directly
+;; doesn't like to be called directly
 (defun dabbrev-expand-complete (&optional arg)
   (interactive "*P")
   (call-interactively 'dabbrev-expand))

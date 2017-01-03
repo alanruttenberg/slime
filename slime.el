@@ -5348,6 +5348,7 @@ Regexp heuristics are used to avoid showing SWANK-internal frames."
 (defun sldb-insert-frames (frames more)
   "Insert FRAMES into buffer.
 If MORE is non-nil, more frames are on the Lisp stack."
+  (princ (length frames))
   (mapc #'sldb-insert-frame frames)
   (when more
     (slime-insert-propertized
@@ -5358,7 +5359,10 @@ If MORE is non-nil, more frames are on the Lisp stack."
              start-open t
              face sldb-section-face
              mouse-face highlight)
-     " --more--")
+     (if (>= (length frames) 
+             (slime-eval '(cl:symbol-value 'swank::*sldb-initial-frames*)))
+         " --more--"
+       ""))
     (insert "\n")))
 
 (defun sldb-compute-frame-face (frame)

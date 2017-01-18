@@ -535,7 +535,7 @@ See `methods-by-applicability'.")
     ,@(let ((doc (documentation class t)))
         (when doc
           `("Documentation:" (:newline) ,(inspector-princ doc) (:newline))))
-    "Sub classes: "
+    (:label "Sub classes: ")
     ,@(common-seperated-spec (swank-mop:class-direct-subclasses class)
                              (lambda (sub)
                                `(:value ,sub

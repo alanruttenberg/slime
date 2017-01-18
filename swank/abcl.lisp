@@ -44,6 +44,11 @@
     (ext:make-slime-input-stream read-string
                                  (make-synonym-stream '*standard-output*))))
 
+(swank::wrap 'cl:inspect :use-slime :replace 'swank::inspect-in-emacs)
+
+(defun cl:inspect(object)
+  (swank::inspect-in-emacs object))
+
 (defimplementation call-with-compilation-hooks (function)
   (funcall function))
 
@@ -348,7 +353,17 @@
 
 (defvar *sldb-topframe*)
 
-;; with new backtrace magic-token won't appear in the backtrace
+(defimplementation call-with-debugging-environment (debugger-loop-fn)
+  (let* ((magic-token (intern "SWANK-DEBUGGER-HOOK" 'swank))
+         (*sldb-topframe* 
+           (or
+            (second (member magic-token sys::*saved-backtrace* ;(sys:backtrace)
+                            :key (lambda (frame)
+                                   (first (sys:frame-to-list frame)))))
+            (car sys::*saved-backtrace*)))
+         (ext::*debug-condition* swank::*swank-debugger-condition*))
+    (funcall debugger-loop-fn)))
+
 (defimplementation call-with-debugging-environment (debugger-loop-fn)
   (let* ((magic-token (intern "SWANK-DEBUGGER-HOOK" 'swank))
          (*sldb-topframe* 

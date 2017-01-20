@@ -33,15 +33,14 @@
   (:import-from :java #:jcall #:jstatic #:jmethod #:jfield
 		#:jconstructor #:jnew-array #:jnew-array-from-array
 		#:jarray-length #:jarray-ref #:jnew #:java-object
-		#:jclass #:jinstance-of-p #:jclass-superclass  
-		#:jclass-interfaces #:java-exception
-  ))
-
-;; be conservative and add any import java functions only for later lisps
-#+:abcl-intro
-(shadowing-import '(java::jfield-name java::jinstance-of-p
-	java::jclass-superclass java::jclass-interfaces
-	java::java-exception ))
+		#:jclass 
+                ;; be conservative and add any import java functions only for later lisps
+                #+#.(swank/backend:with-symbol 'jfield-name 'java) #:jfield-name
+                #+#.(swank/backend:with-symbol 'jinstance-of-p 'java) #:jinstance-of-p
+                #+#.(swank/backend:with-symbol 'jclass-superclass 'java) #:jclass-superclass
+                #+#.(swank/backend:with-symbol 'jclass-interfaces 'java) #:jclass-interfaces
+                #+#.(swank/backend:with-symbol 'java-exception 'java) #:java-exception
+                ))
 
 (in-package swank/abcl)
 

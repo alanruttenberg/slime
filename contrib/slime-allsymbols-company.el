@@ -53,32 +53,55 @@
 			     (funcall callback (car result))))
 			 package)))))))
 
+(defvar allsymbols-completion-syntax-table 
+      (let ((table (make-syntax-table)))
+        (modify-syntax-entry ?[ "w" table)
+        (modify-syntax-entry ?] "w" table)
+        table))
+
+(string (char-syntax ?\$))
+
+(defun company-grab-symbol-sans-package ()
+  "If point is at the end of a symbol, return it.
+Otherwise, if point is not inside a symbol, return an empty string."
+  (interactive)
+  (if (looking-at "\\_>")
+      (buffer-substring (point) (save-excursion (skip-syntax-backward "w")
+                                                (point)))
+    (unless (and (char-after) (memq (char-syntax (char-after)) '(?w)))
+      "")))
+
+sood::adoa
+
 (defun company-slime-allsymbols (command &optional arg &rest ignored)
   "Company mode backend for slime."
   (cl-case command
-	   (init
-	    (slime-company-active-p))
-	   (prefix
-	    (when (and (slime-company-active-p)
-		       (slime-connected-p)
-		       (or slime-company-complete-in-comments-and-strings
-			   (null (company-in-string-or-comment))))
-	      (company-grab-symbol)))
-	   (candidates
-	    (slime-allsymbols-company--fetch-candidates-async (substring-no-properties arg)))
-	   (match
-	       (let ((prefix (company-grab-symbol) ))
-		 (+ (search prefix arg) (length prefix))))
-	   (meta
-	    (slime-company--arglist (substring-no-properties arg)))
-	   (annotation (concat " " (get-text-property 0 'flags arg)))
-	   (doc-buffer
-	    (slime-company--doc-buffer (substring-no-properties arg)))
-	   (location
-	    (slime-company--location (substring-no-properties arg)))
-	   (post-completion
-	    (slime-company--post-completion (substring-no-properties arg)))
-	   (no-cache t)
-	   (sorted t)))
+    (init
+     (slime-company-active-p))
+    (prefix
+     (when (and (slime-company-active-p)
+		(slime-connected-p)
+		(or slime-company-complete-in-comments-and-strings
+		    (null (company-in-string-or-comment))))
+       ;; replace the whole thing - symbol + package
+       (company-grab-symbol)))
+    (candidates
+     (slime-allsymbols-company--fetch-candidates-async (substring-no-properties arg)))
+    ;; but match only the non-package-prefixed word. Maybe sort
+    ;; preferentially based on written package...
+    (match
+     (let ((prefix (company-grab-symbol-sans-package) ))
+       (+ (search prefix arg) (length prefix))))
+    (meta
+     (slime-company--arglist (substring-no-properties arg)))
+    (annotation (concat " " (get-text-property 0 'flags arg)))
+    (doc-buffer
+     (slime-company--doc-buffer (substring-no-properties arg)))
+    (location
+     (slime-company--location (substring-no-properties arg)))
+    (post-completion
+     (slime-company--post-completion (substring-no-properties arg)))
+    (no-cache t)
+    (sorted t)))
 
 (provide 'slime-allsymbols-company)

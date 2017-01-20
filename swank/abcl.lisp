@@ -39,7 +39,7 @@
 
 ;; be conservative and add any import java functions only for later lisps
 #+:abcl-intro
-(import '(java::jfield-name java::jinstance-of-p
+(shadowing-import '(java::jfield-name java::jinstance-of-p
 	java::jclass-superclass java::jclass-interfaces
 	java::java-exception ))
 

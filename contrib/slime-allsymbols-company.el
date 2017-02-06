@@ -71,8 +71,6 @@ Otherwise, if point is not inside a symbol, return an empty string."
     (unless (and (char-after) (memq (char-syntax (char-after)) '(?w)))
       "")))
 
-sood::adoa
-
 (defun company-slime-allsymbols (command &optional arg &rest ignored)
   "Company mode backend for slime."
   (cl-case command

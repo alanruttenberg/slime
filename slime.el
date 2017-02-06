@@ -7524,6 +7524,8 @@ The returned bounds are either nil or non-empty."
 (run-hooks 'slime-load-hook)
 (provide 'slime)
 
+(slime-setup)
+
 ;; Local Variables:
 ;; outline-regexp: ";;;;+"
 ;; indent-tabs-mode: nil

@@ -59,8 +59,6 @@
         (modify-syntax-entry ?] "w" table)
         table))
 
-(string (char-syntax ?\$))
-
 (defun company-grab-symbol-sans-package ()
   "If point is at the end of a symbol, return it.
 Otherwise, if point is not inside a symbol, return an empty string."

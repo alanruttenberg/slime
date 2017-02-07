@@ -474,9 +474,10 @@
 ;; Rewrite jss expansions to their unexpanded state
 ;; Show java exception frames up to where a java exception happened with a "!" 
 ;; Check if a java class corresponds to a lisp function and tell us if to
+(defvar *debugger-package* (find-package 'cl-user))
 #+abcl-intro
 (defimplementation print-frame (frame stream)
-  (let ((*package* (find-package 'cl))) ;; make clear which functions aren't common lisp. Otherwise uses default package, which is invisible
+  (let ((*package* (or *debugger-package* *package*))) ;; make clear which functions aren't common lisp. Otherwise uses default package, which is invisible
     (if (typep frame 'sys::lisp-stack-frame)
         (if (not (jss-p))
             (princ (system:frame-to-list frame) stream)

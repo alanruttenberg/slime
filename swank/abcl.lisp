@@ -706,6 +706,17 @@
       (let ((name (function-name fun)))
         (and name (source-location name)))))
 
+(defmethod source-location ((method method))
+  #+abcl-intro
+  (let ((found 
+          (find `(:method ,@(sys::method-spec-list method))
+                (get (function-name method) 'sys::source)
+                :key 'car :test 'equalp)))
+    (and found (second (slime-location-from-source-annotation (function-name method) found))))
+  #-abcl-intro
+  (let ((name (function-name fun)))
+    (and name (source-location name))))
+
 ;; try to find some kind of source for internals
 #+abcl-intro
 (defun implementation-source-location (arg)
@@ -782,8 +793,7 @@
 (defun if-we-have-to-choose-one-choose-the-function (sources)
   (or (loop for spec in  sources
             for (dspec) = spec
-            when (and (consp dspec) (eq (car dspec) :function))
-            when (and (consp dspec) (member (car dspec) '(:swank-implementation :function)))
+            when (and (consp dspec) (member (car dspec) '(:swank-implementation :function :generic-function)))
                  do (return-from if-we-have-to-choose-one-choose-the-function spec))
       (car sources)))
 

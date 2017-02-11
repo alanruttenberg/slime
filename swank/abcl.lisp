@@ -40,6 +40,9 @@
                 #+#.(swank/backend:with-symbol 'jclass-superclass 'java) #:jclass-superclass
                 #+#.(swank/backend:with-symbol 'jclass-interfaces 'java) #:jclass-interfaces
                 #+#.(swank/backend:with-symbol 'java-exception 'java) #:java-exception
+                #+#.(swank/backend:with-symbol 'jobject-class 'java) #:jobject-class
+                #+#.(swank/backend:with-symbol 'jclass-name 'java) #:jclass-name
+                #+#.(swank/backend:with-symbol 'java-object-p 'java) #:java-object-p
                 ))
 
 (in-package swank/abcl)
@@ -67,6 +70,33 @@
 
 ;; Common lisp inspect should use slime 
 (swank::wrap 'cl:inspect :use-slime :replace 'swank::inspect-in-emacs)
+
+;; repair bare print object so inspector titles show java class
+(swank::wrap 'sys::%print-unreadable-object :more-informative :replace 'maybe-%print-unreadable-java-object)
+
+(defun maybe-%print-unreadable-java-object (object stream type identity body)
+  (when (not (java-object-p object))
+    (return-from maybe-%print-unreadable-java-object
+      (sys::%print-unreadable-object object stream type identity body)))
+  (setf stream (sys::out-synonym-of stream))
+  (when *print-readably*
+    (error 'print-not-readable :object object))
+  (format stream "#<")
+    (when type
+      (if (jinstance-of-p object "java.lang.Class")
+	  (progn
+	    (write-string "jclass " stream)
+	    (format stream "~a" (jclass-name object)))
+	  (format stream "~a" (jclass-name (jobject-class object))))
+      (format stream " "))
+  (when body
+    (funcall body))
+  (when identity
+    (when (or body (not type))
+      (format stream " "))
+    (format stream "{~X}" (sys::identity-hash-code object)))
+  (format stream ">")
+  nil)
 
 (defimplementation call-with-compilation-hooks (function)
   (funcall function))
@@ -1031,7 +1061,7 @@
 ;;; Although by convention toString() is supposed to be a
 ;;; non-computationally expensive operation this isn't always the
 ;;; case, so make its computation a user interaction.
-(defparameter *to-string-hashtable* (make-hash-table))
+(defparameter *to-string-hashtable* (make-hash-table :weakness :key))
 
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
@@ -1163,22 +1193,50 @@
 (defmethod emacs-inspect ((o java-object))
   (if #+abcl-intro (jinstance-of-p o (jclass "java.lang.Class")) #-abcl-intro nil
       (emacs-inspect-java-class o)
-      (let ((to-string (lambda ()
-                         (handler-case
-                             (setf (gethash o *to-string-hashtable*)
-                                   (jcall "toString" o))
-                           (t (e)
-                             (setf (gethash o *to-string-hashtable*)
-                                   (format nil
-                                           "Could not invoke toString(): ~A"
-                                           e)))))))
-        (append
-         (if (gethash o *to-string-hashtable*)
-             (label-value-line "toString()" (gethash o *to-string-hashtable*))
-             `((:action "[compute toString()]" ,to-string) (:newline)))
-         (loop :for (label . value) :in (sys:inspected-parts o)
-               :appending (label-value-line label value))
-         ))))
+      (emacs-inspect-java-object o)))
+
+(defvar *slime-tostring-on-demand* nil "Set to t if you don't want to automatically show toString() for java objects and instead have inspector action to compute")
+
+(defun static-field? (field)
+  (plusp (logand #"reflect.Modifier.STATIC" (#"getModifiers" field))))
+
+(defun inspector-java-object-fields (object)
+  (loop for super = (java::jobject-class object) then (jclass-superclass super)
+        while (print super)
+        for fields = (sort (jcall "getDeclaredFields" super) 'string-lessp :key #"getName")
+        for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
+        when (and (plusp (length fields)) fromline)
+          append fromline
+        append
+        (loop for this across fields
+	      for value = (#"get" (progn (#"setAccessible" this t) this) object)
+	      for line = `("  " (:label ,(jcall "getName" this)) ": " (:value ,value) (:newline))
+	      if (static-field? this)
+		append line into statics
+	      else append line into members
+	      finally (return (append
+			       (if members `((:label "Member fields: ") (:newline) ,@members))
+			       (if statics `((:label "Static fields: ") (:newline) ,@statics)))))))
+
+(defun emacs-inspect-java-object (object)
+  (let ((to-string (lambda ()
+		     (handler-case
+			 (setf (gethash object *to-string-hashtable*)
+			       (jcall "toString" object))
+		       (t (e)
+			 (setf (gethash object *to-string-hashtable*)
+			       (format nil
+				       "Could not invoke toString(): ~A"
+				       e))))))
+	(intended-class (cdr (car (last (sys::inspected-parts  object))))))
+    `((:label "Class: ") (:value ,(#"getClass" object) ,(#"getName" (#"getClass" object) )) (:newline)
+      ,@(if (and intended-class (not (equal intended-class (#"getName" (#"getClass" object)))))
+	    `((:label "Intended Class: ") (:value ,(jclass intended-class) ,intended-class) (:newline)))
+      ,@(if (or (gethash object *to-string-hashtable*) (not *slime-tostring-on-demand*))
+	    (label-value-line "toString()" (funcall to-string))
+	    `((:action "[compute toString()]" ,to-string) (:newline)))
+      ,@(inspector-java-object-fields object))
+    ))
 
 (defmethod emacs-inspect ((slot mop::slot-definition))
   `("Name: "

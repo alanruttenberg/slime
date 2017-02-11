@@ -72,22 +72,21 @@
 (swank::wrap 'cl:inspect :use-slime :replace 'swank::inspect-in-emacs)
 
 ;; repair bare print object so inspector titles show java class
-(swank::wrap 'sys::%print-unreadable-object :more-informative :replace 'maybe-%print-unreadable-java-object)
-
-(defun maybe-%print-unreadable-java-object (object stream type identity body)
-  (when (not (java-object-p object))
-    (return-from maybe-%print-unreadable-java-object
-      (sys::%print-unreadable-object object stream type identity body)))
+(defun %print-unreadable-object-java-too (object stream type identity body)
   (setf stream (sys::out-synonym-of stream))
   (when *print-readably*
     (error 'print-not-readable :object object))
   (format stream "#<")
-    (when type
-      (if (jinstance-of-p object "java.lang.Class")
-	  (progn
-	    (write-string "jclass " stream)
-	    (format stream "~a" (jclass-name object)))
-	  (format stream "~a" (jclass-name (jobject-class object))))
+  (when type
+    (if (java-object-p object)
+        ;; Special handling for java objects
+        (if (jinstance-of-p object "java.lang.Class")
+            (progn
+              (write-string "jclass " stream)
+              (format stream "~a" (jclass-name object)))
+            (format stream "~a" (jclass-name (jobject-class object))))
+        ;; usual handling
+        (format stream "~S" (type-of object)))
       (format stream " "))
   (when body
     (funcall body))
@@ -97,6 +96,8 @@
     (format stream "{~X}" (sys::identity-hash-code object)))
   (format stream ">")
   nil)
+
+(wrap 'sys::%print-unreadable-object :more-informative :replace '%print-unreadable-object-java-too )
 
 (defimplementation call-with-compilation-hooks (function)
   (funcall function))

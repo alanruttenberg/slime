@@ -1203,7 +1203,7 @@
 
 (defun inspector-java-object-fields (object)
   (loop for super = (java::jobject-class object) then (jclass-superclass super)
-        while (print super)
+        while super
         for fields = (sort (jcall "getDeclaredFields" super) 'string-lessp :key #"getName")
         for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
         when (and (plusp (length fields)) fromline)

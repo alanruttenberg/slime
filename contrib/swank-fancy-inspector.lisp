@@ -600,6 +600,9 @@ See `methods-by-applicability'.")
               collect "  "
 	      collect `(:value ,method ,(inspector-princ (car method-spec)))
               collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
+	      append (let ((method method))
+		       `(" " (:action "[remove]"
+				      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
               collect '(:newline)
               if (documentation method t)
               collect "    Documentation: " and

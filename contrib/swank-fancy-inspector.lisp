@@ -558,6 +558,9 @@ See `methods-by-applicability'.")
               collect `(:value ,method
                                ,(inspector-princ
                                  (method-for-inspect-value method)))
+	      append (let ((method method))
+		       `(" " (:action "[remove]"
+				      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
               collect '(:newline)
               if (documentation method t)
               collect "    Documentation: " and

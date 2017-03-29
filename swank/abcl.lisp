@@ -683,32 +683,32 @@
         (and maybe (second (slime-location-from-source-annotation symbol maybe))))
       ;; This below should be obsolete - it uses the old sys:%source
       ;; leave it here for now just in case
-      (and (pathnamep (ext:source-pathname symbol))
-           (let ((pos (ext:source-file-position symbol))
-                 (path (namestring (ext:source-pathname symbol))))
+  (when (pathnamep (ext:source-pathname symbol))
+    (let ((pos (ext:source-file-position symbol))
+          (path (namestring (ext:source-pathname symbol))))
              ; boot.lisp gets recorded wrong
              (if (equal path "boot.lisp") (setq path (second (find-file-in-path "org/armedbear/lisp/boot.lisp" *source-path*))))
-             (cond ((ext:pathname-jar-p path)
-                    `(:location
-                      ;; strip off "jar:file:" = 9 characters
-                      (:zip ,@(split-string (subseq path 9) "!/"))
-                      ;; pos never seems right. Use function name.
-                      (:function-name ,(string symbol))
-                      (:align t)))
-                   ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-                    ;; conspire with swank-compile-string to keep the buffer
-                    ;; name in a pathname whose device is "emacs-buffer".
-                    `(:location
-                      (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                      (:function-name ,(string symbol))
-                      (:align t)))
-                   (t
-                    `(:location
-                      (:file ,path)
-                      ,(if pos
-                           (list :position (1+ pos))
-                           (list :function-name (string symbol)))
-                      (:align t))))))
+      (cond ((ext:pathname-jar-p path)
+             `(:location
+               ;; strip off "jar:file:" = 9 characters
+               (:zip ,@(split-string (subseq path 9) "!/"))
+               ;; pos never seems right. Use function name.
+               (:function-name ,(string symbol))
+               (:align t)))
+            ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
+             ;; conspire with swank-compile-string to keep the buffer
+             ;; name in a pathname whose device is "emacs-buffer".
+             `(:location
+                (:buffer ,(pathname-name (ext:source-pathname symbol)))
+                (:function-name ,(string symbol))
+                (:align t)))
+            (t
+             `(:location
+                (:file ,path)
+                ,(if pos
+                     (list :position (1+ pos))
+                     (list :function-name (string symbol)))
+                (:align t)))))))
       #+abcl-intro
       (second (implementation-source-location symbol))))
 

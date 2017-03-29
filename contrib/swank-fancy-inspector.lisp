@@ -106,32 +106,35 @@
 
 (defun lines-for-symbol-in-other-packages (symbol)
   (let ((others
-	  (loop for p in (LIST-ALL-PACKAGES) 
-		for candidate = (find-symbol (string symbol) p) 
-		for found = (and (not (null candidate)) 
-				 (eq (symbol-package candidate) p)
-				 (not (eq (symbol-package symbol) (symbol-package candidate)))
-				      
-				 candidate)
-		for (constant function value class package structure) = (and found (symbol-info found))
-		for specs  = (and found (append (if value `((:value ,value
-								    ,(if constant "constant" "bound") ", ")))
-						(if function `((:value ,function "fbound" ", ")))
-						(if package `((:value ,package "package" ", ")))
-						(if class `((:value ,class "class") ", "))
-						(if structure `((:value ,structure "structure") ", "))))
-		when found
-		  collect
-		  (let ((specs (butlast specs)))
-		    (list* (list :value found (let ((*package* (find-package :keyword))) (format nil "~s" found)))
-			   (if specs ": " "")
-			   (append specs '((:newline))))))))
-
-	 (if others
-	     `("In other packages: " 
-	       (:newline)  
-	       ,@(apply 'append others)
-	       ))))
+         (loop for p in (list-all-packages) 
+            for candidate = (find-symbol (string symbol) p) 
+            for found = (and (not (null candidate)) 
+                             (eq (symbol-package candidate) p)
+                             (not (eq (symbol-package symbol) (symbol-package candidate)))
+                             candidate)
+            for (constant function value class package structure) = (and found (symbol-info found))
+            for specs  = (and found
+                              (append (when value
+                                        `((:value ,value
+                                                  ,(if constant "constant" "bound") ", ")))
+                                      (when function
+                                        `((:value ,function "fbound" ", ")))
+                                      (when package
+                                        `((:value ,package "package" ", ")))
+                                      (when class
+                                        `((:value ,class "class") ", "))
+                                      (when structure
+                                        `((:value ,structure "structure") ", "))))
+            when found
+            collect
+              (let ((specs (butlast specs)))
+                (list* (list :value found (let ((*package* (find-package :keyword))) (format nil "~s" found)))
+                       (if specs ": " "")
+                       (append specs '((:newline))))))))
+    (if others
+        `("In other packages: " 
+          (:newline)  
+          ,@(apply 'append others)))))
 
 #-sbcl
 (defun inspect-type-specifier (symbol)

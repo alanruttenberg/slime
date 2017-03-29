@@ -710,7 +710,7 @@
                      (list :function-name (string symbol)))
                 (:align t)))))))
       #+abcl-intro
-      (second (implementation-source-location symbol))))
+      (second (implementation-source-location symbol)))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -1199,18 +1199,21 @@
 (defvar *slime-tostring-on-demand* nil "Set to t if you don't want to automatically show toString() for java objects and instead have inspector action to compute")
 
 (defun static-field? (field)
-  (plusp (logand #"reflect.Modifier.STATIC" (#"getModifiers" field))))
+  ;; (plusp (logand #"reflect.Modifier.STATIC" (jcall "getModifiers" field)))
+  ;; ugly replace with answer to avoid using jss
+  (plusp (logand 8 (jcall "getModifiers" field))))
 
 (defun inspector-java-object-fields (object)
   (loop for super = (java::jobject-class object) then (jclass-superclass super)
         while super
-        for fields = (sort (jcall "getDeclaredFields" super) 'string-lessp :key #"getName")
+        ;;; NOTE: In the next line, if I write #'(lambda.... then I get an error compiling "Attempt to throw to the nonexistent tag DUPLICATABLE-CODE-P.". WTF
+        for fields = (sort (jcall "getDeclaredFields" super) 'string-lessp :key (lambda(x) (jcall "getName" x)))
         for fromline = nil then (list `(:label "From: ") `(:value ,super  ,(jcall "getName" super)) '(:newline))
         when (and (plusp (length fields)) fromline)
           append fromline
         append
         (loop for this across fields
-	      for value = (#"get" (progn (#"setAccessible" this t) this) object)
+	      for value = (jcall "get" (progn (jcall "setAccessible" this t) this) object)
 	      for line = `("  " (:label ,(jcall "getName" this)) ": " (:value ,value) (:newline))
 	      if (static-field? this)
 		append line into statics
@@ -1230,8 +1233,8 @@
 				       "Could not invoke toString(): ~A"
 				       e))))))
 	(intended-class (cdr (car (last (sys::inspected-parts  object))))))
-    `((:label "Class: ") (:value ,(#"getClass" object) ,(#"getName" (#"getClass" object) )) (:newline)
-      ,@(if (and intended-class (not (equal intended-class (#"getName" (#"getClass" object)))))
+    `((:label "Class: ") (:value ,(jcall "getClass" object) ,(jcall "getName" (jcall "getClass" object) )) (:newline)
+      ,@(if (and intended-class (not (equal intended-class (jcall "getName" (jcall "getClass" object)))))
 	    `((:label "Intended Class: ") (:value ,(jclass intended-class) ,intended-class) (:newline)))
       ,@(if (or (gethash object *to-string-hashtable*) (not *slime-tostring-on-demand*))
 	    (label-value-line "toString()" (funcall to-string))
@@ -1299,15 +1302,17 @@
   (let ((has-superclasses (jclass-superclass class))
         (has-interfaces (plusp (length (jclass-interfaces class))))
         (fields (inspector-java-fields class))
-        (path (jcall "getResource" 
-                class
-                (concatenate 'string "/" (substitute #\/ #\. (jcall "getName" class)) ".class"))))
+        (path (jcall "replaceFirst" (jcall "replaceFirst"  
+                                (jcall "toString" (jcall "getResource" 
+                                                    class
+                                                    (concatenate 'string "/" (substitute #\/ #\. (jcall "getName" class)) ".class")))
+                                "jar:file:" "") "!.*" "")))
     `((:label ,(format nil "Java Class: ~a" (jcall "getName" class) ))
       (:newline)
-      ,@(when path (list `(:label ,"Path: ") `(:value ,path) '(:newline)))
+      ,@(when path (list `(:label ,"Loaded from: ") `(:value ,path) " " `(:action "[open in emacs buffer]" ,(lambda() (swank::ed-in-emacs `( ,path)))) '(:newline)))
       ,@(if has-superclasses 
             (list* '(:label "Superclasses: ") (butlast (loop for super = (jclass-superclass class) then (jclass-superclass super)
-                            while super collect (list :value super (jcall "getName" super)) collect ", "))))
+                                                             while super collect (list :value super (jcall "getName" super)) collect ", "))))
       ,@(if has-interfaces
             (list* '(:newline) '(:label "Implements Interfaces: ")
                    (butlast (loop for i across (jclass-interfaces class) collect (list :value i (jcall "getName" i)) collect ", "))))

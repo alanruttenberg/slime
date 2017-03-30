@@ -683,32 +683,32 @@
         (and maybe (second (slime-location-from-source-annotation symbol maybe))))
       ;; This below should be obsolete - it uses the old sys:%source
       ;; leave it here for now just in case
-  (when (pathnamep (ext:source-pathname symbol))
-    (let ((pos (ext:source-file-position symbol))
-          (path (namestring (ext:source-pathname symbol))))
+      (and (pathnamep (ext:source-pathname symbol))
+           (let ((pos (ext:source-file-position symbol))
+                 (path (namestring (ext:source-pathname symbol))))
              ; boot.lisp gets recorded wrong
              (if (equal path "boot.lisp") (setq path (second (find-file-in-path "org/armedbear/lisp/boot.lisp" *source-path*))))
-      (cond ((ext:pathname-jar-p path)
-             `(:location
-               ;; strip off "jar:file:" = 9 characters
-               (:zip ,@(split-string (subseq path 9) "!/"))
-               ;; pos never seems right. Use function name.
-               (:function-name ,(string symbol))
-               (:align t)))
-            ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
-             ;; conspire with swank-compile-string to keep the buffer
-             ;; name in a pathname whose device is "emacs-buffer".
-             `(:location
-                (:buffer ,(pathname-name (ext:source-pathname symbol)))
-                (:function-name ,(string symbol))
-                (:align t)))
-            (t
-             `(:location
-                (:file ,path)
-                ,(if pos
-                     (list :position (1+ pos))
-                     (list :function-name (string symbol)))
-                (:align t)))))))
+             (cond ((ext:pathname-jar-p path)
+                    `(:location
+                      ;; strip off "jar:file:" = 9 characters
+                      (:zip ,@(split-string (subseq path 9) "!/"))
+                      ;; pos never seems right. Use function name.
+                      (:function-name ,(string symbol))
+                      (:align t)))
+                   ((equal (pathname-device (ext:source-pathname symbol)) "emacs-buffer")
+                    ;; conspire with swank-compile-string to keep the buffer
+                    ;; name in a pathname whose device is "emacs-buffer".
+                    `(:location
+                      (:buffer ,(pathname-name (ext:source-pathname symbol)))
+                      (:function-name ,(string symbol))
+                      (:align t)))
+                   (t
+                    `(:location
+                      (:file ,path)
+                      ,(if pos
+                           (list :position (1+ pos))
+                           (list :function-name (string symbol)))
+                      (:align t))))))
       #+abcl-intro
       (second (implementation-source-location symbol)))
 
@@ -1322,6 +1322,72 @@
             (list*
              '(:newline) '(:label "Fields:") '(:newline)
              fields)))))
+
+(defmethod emacs-inspect ((object sys::structure-object))
+  (let ((structure-def (get (type-of object) 'system::structure-definition )))
+    `((:label "Type: ") (:value ,(type-of object)) (:newline)
+      (:label "Class: ") (:value ,(class-of object)) (:newline)
+      ,@(inspector-structure-slot-names-and-values object))))
+
+(defun inspector-structure-slot-names-and-values (structure)
+  (let ((structure-def (get (type-of structure) 'system::structure-definition )))
+    `((:label "Slots: ") (:newline)
+      ,@(loop for slotdef in (sys::dd-slots structure-def)
+              for name = (sys::dsd-name slotdef)
+              for reader = (sys::dsd-reader slotdef)
+              for value = (eval `(,reader ,structure ))
+              append
+              `("  " (:label ,(string-downcase (string name))) ": " (:value ,value) (:newline))))))
+
+(defmethod emacs-inspect ((object sys::structure-class))
+  `((:label "Defstruct: ") (:value ,(jss::get-java-field object "name" t)) (:newline)
+    (:label "Class: ") (:value ,object) (:newline)
+    (:label "Definition: ") (:value ,(get (jss::get-java-field object "name" t) 'system::structure-definition))
+    ,@(parts-for-structure-def  (jss::get-java-field object "name" t))
+    ;; copy-paste from swank fancy inspector
+    ,@(when (swank-mop:specializer-direct-methods object)
+        `((:label "It is used as a direct specializer in the following methods:")
+          (:newline)
+          ,@(loop
+              for method in (specializer-direct-methods object)
+              for method-spec = (swank::method-for-inspect-value method)
+              collect "  "
+              collect `(:value ,method ,(swank::inspector-princ (car method-spec)))
+              collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
+              append (let ((method method))
+                       `(" " (:action "[remove]"
+                                      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
+              collect '(:newline)
+              if (documentation method t)
+                collect "    Documentation: " and
+              collect (swank::abbrev-doc  (documentation method t)) and
+              collect '(:newline)))))
+  ;; copy-paste from swank fancy inspector
+  )
+
+(defun parts-for-structure-def (name)
+  (let ((structure-def (get name 'system::structure-definition )))
+    (append
+     (loop for accessor in '(dd-name dd-conc-name dd-default-constructor dd-constructors dd-copier dd-include dd-type
+                             dd-named dd-initial-offset dd-predicate dd-print-function dd-print-object
+                             dd-inherited-accessors)
+           for key = (intern (subseq (string accessor) 3) 'keyword)
+           for fsym = (find-symbol (string accessor) 'system)
+           for value = (eval `(,fsym ,structure-def))
+           append `((:label ,(string-capitalize (string key))) ": " (:value ,value) (:newline)))
+     (let* ((direct (sys::dd-direct-slots structure-def) )
+           (all (sys::dd-slots structure-def))
+           (inherited (set-difference all direct)))
+     `((:label "Direct slots: ") (:newline)
+       ,@(loop for slotdef in direct  
+               append `("  " (:value ,slotdef ,(string-downcase (string (sys::dsd-name slotdef))))  
+                             (:newline)))
+       ,@(if inherited 
+             (append '((:label "Inherited slots: ") (:newline))
+                     (loop for slotdef in inherited  
+                           append `("  " (:label ,(string-downcase (string (sys::dsd-name slotdef))))
+                                         (:value ,slotdef "slot definition")
+                                         (:newline))))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Multithreading

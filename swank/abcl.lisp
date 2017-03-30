@@ -1340,10 +1340,11 @@
               `("  " (:label ,(string-downcase (string name))) ": " (:value ,value) (:newline))))))
 
 (defmethod emacs-inspect ((object sys::structure-class))
-  `((:label "Defstruct: ") (:value ,(jss::get-java-field object "name" t)) (:newline)
-    (:label "Class: ") (:value ,object) (:newline)
-    (:label "Definition: ") (:value ,(get (jss::get-java-field object "name" t) 'system::structure-definition))
-    ,@(parts-for-structure-def  (jss::get-java-field object "name" t))
+  (let* ((name (jss::get-java-field object "name" t))
+         (def (get name  'system::structure-definition)))
+  `((:label "Class: ") (:value ,object) (:newline)
+    (:label "Raw structure definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
+    ,@(parts-for-structure-def  name)
     ;; copy-paste from swank fancy inspector
     ,@(when (swank-mop:specializer-direct-methods object)
         `((:label "It is used as a direct specializer in the following methods:")
@@ -1352,7 +1353,7 @@
               for method in (specializer-direct-methods object)
               for method-spec = (swank::method-for-inspect-value method)
               collect "  "
-              collect `(:value ,method ,(swank::inspector-princ (car method-spec)))
+              collect `(:value ,method ,(string-downcase (string (car method-spec))))
               collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
               append (let ((method method))
                        `(" " (:action "[remove]"
@@ -1363,8 +1364,16 @@
               collect (swank::abbrev-doc  (documentation method t)) and
               collect '(:newline)))))
   ;; copy-paste from swank fancy inspector
-  )
+  ))
 
+(defun parts-for-structure-def-slot (def)
+  `((:label ,(string-downcase (sys::dsd-name def))) " reader: " (:value ,(sys::dsd-reader def) ,(string-downcase (string (sys::dsd-reader def))))
+    ", index: " (:value ,(sys::dsd-index def))
+    ,@(if (sys::dsd-initform def)
+          `(", initform: " (:value ,(sys::dsd-initform def))))
+    ,@(if (sys::dsd-read-only def)
+         '(", Read only"))))
+  
 (defun parts-for-structure-def (name)
   (let ((structure-def (get name 'system::structure-definition )))
     (append
@@ -1380,7 +1389,7 @@
            (inherited (set-difference all direct)))
      `((:label "Direct slots: ") (:newline)
        ,@(loop for slotdef in direct  
-               append `("  " (:value ,slotdef ,(string-downcase (string (sys::dsd-name slotdef))))  
+               append `("  " ,@(parts-for-structure-def-slot slotdef)
                              (:newline)))
        ,@(if inherited 
              (append '((:label "Inherited slots: ") (:newline))

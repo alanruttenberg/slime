@@ -710,7 +710,7 @@
                            (list :function-name (string symbol)))
                       (:align t))))))
       #+abcl-intro
-      (second (implementation-source-location symbol)))
+      (second (implementation-source-location symbol))))
 
 (defmethod source-location ((frame sys::java-stack-frame))
   (destructuring-bind (&key class method file line) (sys:frame-to-list frame)
@@ -1343,7 +1343,7 @@
   (let* ((name (jss::get-java-field object "name" t))
          (def (get name  'system::structure-definition)))
   `((:label "Class: ") (:value ,object) (:newline)
-    (:label "Raw structure definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
+    (:label "Raw defstruct definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
     ,@(parts-for-structure-def  name)
     ;; copy-paste from swank fancy inspector
     ,@(when (swank-mop:specializer-direct-methods object)

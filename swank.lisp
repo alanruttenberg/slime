@@ -3707,7 +3707,9 @@ Collisions are caused because package information is ignored."
   (setq *load-path* load-path))
 
 (defun init ()
-  (run-hook *after-init-hook*))
+  (run-hook *after-init-hook*)
+  (when (and (find-symbol "*AFTER-SWANK-INIT-HOOK*" "CL-USER") (boundp (intern "*AFTER-SWANK-INIT-HOOK*" "CL-USER")))
+    (run-hook (symbol-value (intern "*AFTER-SWANK-INIT-HOOK*" "CL-USER")))))
 
 ;; Local Variables:
 ;; coding: latin-1-unix

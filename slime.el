@@ -6319,6 +6319,7 @@ was called originally."
 Optionally set point to POINT. If HOOK is provided, it is added to local
 KILL-BUFFER hooks for the inspector buffer."
   (with-current-buffer (slime-inspector-buffer)
+    (visual-line-mode 1)
     (when hook
       (add-hook 'kill-buffer-hook hook t t))
     (setq slime-buffer-connection (slime-current-connection))

@@ -120,9 +120,6 @@ Backend code should treat the connection structure as opaque.")
 (defvar *after-init-hook* '()
   "Hook run after user init files are loaded.")
 
-(defvar *find-definitions-all-packages* nil
-  "If t then find-definitions will be called even if there is no symbol in the current package")
-
 
 ;;;; Connections
 ;;;
@@ -503,6 +500,17 @@ corresponding values in the CDR of VALUE."
 (defmacro with-retry-restart ((&key (msg "Retry.")) &body body)
   (check-type msg string)
   `(call-with-retry-restart ,msg (lambda () ,@body)))
+
+(defmacro with-struct* ((conc-name get obj) &body body)
+  (let ((var (gensym)))
+    `(let ((,var ,obj))
+       (macrolet ((,get (slot)
+                    (let ((getter (intern (concatenate 'string
+                                                       ',(string conc-name)
+                                                       (string slot))
+                                          (symbol-package ',conc-name))))
+                      `(,getter ,',var))))
+         ,@body))))
 
 (defmacro define-special (name doc)
   "Define a special variable NAME with doc string DOC.
@@ -1748,23 +1756,13 @@ last form."
   (with-input-from-string (stream string)
     (let (- values)
       (loop
-	(handler-bind (#+abcl(reader-error
-			 (lambda (condition)
-			   (if (equal (slot-value condition 'sys::format-control)
-				      "Unmatched right parenthesis.")
-			       (progn  
-                                 ;; this has got to be the most irritating way to get into the debugger.
-                                 ;; stop it.
-                                 (warn "ignoring extra right parenthesis")
-                                 (return-from eval-region (values values -)))
-			       (error condition)))))
-	  (let ((form (read stream nil stream)))
-	    (when (eq form stream)
-	      (finish-output)
-	      (return (values values -)))
-	    (setq - form)
-	    (setq values (multiple-value-list (eval form)))
-	    (finish-output)))))))
+       (let ((form (read stream nil stream)))
+         (when (eq form stream)
+           (finish-output)
+           (return (values values -)))
+         (setq - form)
+         (setq values (multiple-value-list (eval form)))
+         (finish-output))))))
 
 (defslimefun interactive-eval-region (string)
   (with-buffer-syntax ()
@@ -1950,17 +1948,14 @@ N.B. this is not an actual package name or nickname."
 
 WHAT can be:
   A pathname or a string,
-  A literal string (:string STRING)
   A list (PATHNAME-OR-STRING &key LINE COLUMN POSITION),
   A function name (symbol or cons),
   NIL. "
   (flet ((canonicalize-filename (filename)
            (pathname-to-filename (or (probe-file filename) filename))))
     (let ((target 
-            (etypecase what
-              (null nil)
-              ((cons (eql :string) (cons string))
-               what)
+           (etypecase what
+             (null nil)
              ((or string pathname) 
               `(:filename ,(canonicalize-filename what)))
              ((cons (or string pathname) *)
@@ -2987,10 +2982,8 @@ If non-nil, called with two arguments SPEC and TRACED-P." )
 DSPEC is a string and LOCATION a source location. NAME is a string."
   (multiple-value-bind (symbol found)
       (find-definitions-find-symbol-or-package name)
-    (if *find-definitions-all-packages*
-        (mapcar #'xref>elisp (find-definitions (or symbol name)))
-        (when found 
-          (mapcar #'xref>elisp (find-definitions (or symbol name)))))))
+    (when found
+      (mapcar #'xref>elisp (find-definitions symbol)))))
 
 ;;; Generic function so contribs can extend it.
 (defgeneric xref-doit (type thing)
@@ -3030,6 +3023,52 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
 (defun xref>elisp (xref)
   (destructuring-bind (name loc) xref
     (list (to-string name) loc)))
+
+
+;;;;; Lazy lists
+
+(defstruct (lcons (:constructor %lcons (car %cdr))
+                  (:predicate lcons?))
+  car
+  (%cdr nil :type (or null lcons function))
+  (forced? nil))
+
+(defmacro lcons (car cdr)
+  `(%lcons ,car (lambda () ,cdr)))
+
+(defmacro lcons* (car cdr &rest more)
+  (cond ((null more) `(lcons ,car ,cdr))
+        (t `(lcons ,car (lcons* ,cdr ,@more)))))
+
+(defun lcons-cdr (lcons)
+  (with-struct* (lcons- @ lcons)
+    (cond ((@ forced?)
+           (@ %cdr))
+          (t
+           (let ((value (funcall (@ %cdr))))
+             (setf (@ forced?) t
+                   (@ %cdr) value))))))
+
+(defun llist-range (llist start end)
+  (llist-take (llist-skip llist start) (- end start)))
+
+(defun llist-skip (lcons index)
+  (do ((i 0 (1+ i))
+       (l lcons (lcons-cdr l)))
+      ((or (= i index) (null l))
+       l)))
+
+(defun llist-take (lcons count)
+  (let ((result '()))
+    (do ((i 0 (1+ i))
+         (l lcons (lcons-cdr l)))
+        ((or (= i count)
+             (null l)))
+      (push (lcons-car l) result))
+    (nreverse result)))
+
+(defun iline (label value)
+  `(:line ,label ,value))
 
 
 ;;;; Inspecting
@@ -3123,28 +3162,24 @@ DSPEC is a string and LOCATION a source location. NAME is a string."
   (let ((newline '#.(string #\newline)))
     (etypecase part
       (string (list part))
-      ((cons (eql :multiple))
-       (mapcan (lambda(p) (prepare-part p istate)) (cdr part)))
       (cons (dcase part
               ((:newline) (list newline))
               ((:value obj &optional str) 
                (list (value-part obj str (istate.parts istate))))
-              ((:strong-value obj &optional str) 
-               (list (value-part obj str (istate.parts istate) t)))
               ((:label &rest strs)
                (list (list :label (apply #'cat (mapcar #'string strs)))))
               ((:action label lambda &key (refreshp t)) 
                (list (action-part label lambda refreshp
                                   (istate.actions istate))))
               ((:line label value)
-               (list `(:label ,(princ-to-string label)) ": "
+               (list (princ-to-string label) ": "
                      (value-part value nil (istate.parts istate))
                      newline)))))))
 
-(defun value-part (object string parts &optional strong?)
-  (list (if strong? :strong-value  :value)
-            (or string (print-part-to-string object))
-            (assign-index object parts)))
+(defun value-part (object string parts)
+  (list :value 
+        (or string (print-part-to-string object))
+        (assign-index object parts)))
 
 (defun action-part (label lambda refreshp actions)
   (list :action label (assign-index (list lambda refreshp) actions)))
@@ -3369,7 +3404,7 @@ Return NIL if LIST is circular."
    (iline "Adjustable" (adjustable-array-p array))
    (iline "Fill pointer" (if (array-has-fill-pointer-p array)
                              (fill-pointer array)))
-   `(:label "Contents:") '(:newline)
+   "Contents:" '(:newline)
    (labels ((k (i max)
               (cond ((= i max) '())
                     (t (lcons (iline i (row-major-aref array i))
@@ -3707,9 +3742,7 @@ Collisions are caused because package information is ignored."
   (setq *load-path* load-path))
 
 (defun init ()
-  (run-hook *after-init-hook*)
-  (when (and (find-symbol "*AFTER-SWANK-INIT-HOOK*" "CL-USER") (boundp (intern "*AFTER-SWANK-INIT-HOOK*" "CL-USER")))
-    (run-hook (symbol-value (intern "*AFTER-SWANK-INIT-HOOK*" "CL-USER")))))
+  (run-hook *after-init-hook*))
 
 ;; Local Variables:
 ;; coding: latin-1-unix

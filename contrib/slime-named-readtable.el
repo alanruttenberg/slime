@@ -36,3 +36,4 @@ or nil if nothing suitable can be found.")
         (match-string-no-properties 2)))))
 
 
+(provide 'slime-named-readtable)

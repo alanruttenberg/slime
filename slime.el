@@ -1207,7 +1207,7 @@ See `slime-start'."
     (format "%S\n\n"
             `(progn
                (load ,(slime-to-lisp-filename (expand-file-name loader))
-                     :verbose t)
+                     :verbose *load-verbose*)
                (funcall (read-from-string "swank-loader:init"))
                (funcall (read-from-string "swank:start-server")
                         ,(slime-to-lisp-filename port-filename))))))

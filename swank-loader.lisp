@@ -287,7 +287,7 @@ If LOAD is true, load the fasl file."
 (defun compile-contribs (&key (src-dir (contrib-dir *source-directory*))
                            (fasl-dir (contrib-dir *fasl-directory*))
                            (swank-src-dir *source-directory*)
-                           load quiet)
+                           load (quiet (not *compile-verbose*)))
   (let* ((swank-src-files (src-files *swank-files* swank-src-dir))
          (contrib-src-files (src-files *contribs* src-dir)))
     (delete-stale-contrib-fasl-files swank-src-files contrib-src-files

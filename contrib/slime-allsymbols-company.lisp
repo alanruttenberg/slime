@@ -9,8 +9,8 @@
 (defun format-allsymbols-completion-set (symbols package-name)
   "Format a set of completion strings. Returns a list of strings with package qualifiers if needed."
   (let ((this (find-package (read-from-string package-name))))
-    (mapcar (lambda (symbol) 
-	      (multiple-value-bind (sym internal-p) (find-symbol (string symbol) this)
+    (mapcar (lambda (symbol)
+	      (multiple-value-bind (sym internal-p) (and this (find-symbol (string symbol) this))
 		(string-downcase 
 		 (if (or (eq sym symbol) (eq (symbol-package sym) (symbol-package symbol)))
 		     (string symbol)

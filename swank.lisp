@@ -2972,9 +2972,9 @@ If non-nil, called with two arguments SPEC and TRACED-P." )
                       (values symbol found)))
                    ;; Packages are not named by symbols, so
                    ;; not-interned symbols can refer to packages
-                   ((find-package name)
-                    (return-from find-definitions-find-symbol-or-package
-                      (values (make-symbol name) t)))))))
+                   ((or *find-definitions-all-packages* (find-package name)
+                        (return-from find-definitions-find-symbol-or-package
+                          (values (make-symbol name) t))))))))
     (do-find name)
     (do-find (string-right-trim *find-definitions-right-trim* name))
     (do-find (string-left-trim *find-definitions-left-trim* name))

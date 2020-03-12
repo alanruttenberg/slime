@@ -116,11 +116,11 @@
             for specs  = (and found
                               (append (when value
                                         `((:value ,value
-                                                  ,(if constant "constant" "bound") ", ")))
+                                                  ,(if constant "constant" "bound")) ", "))
                                       (when function
-                                        `((:value ,function "fbound" ", ")))
+                                        `((:value ,function "fbound") ", "))
                                       (when package
-                                        `((:value ,package "package" ", ")))
+                                        `((:value ,package "package") ", "))
                                       (when class
                                         `((:value ,class "class") ", "))
                                       (when structure

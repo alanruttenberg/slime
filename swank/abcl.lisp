@@ -659,14 +659,14 @@
 
 (defimplementation swank-compile-string (string &key buffer position filename
                                                 policy)
-  (declare (ignore filename policy))
+  (declare (ignore policy))
   (let ((jvm::*resignal-compiler-warnings* t)
         (*abcl-signaled-conditions* nil))
     (handler-bind ((warning #'handle-compiler-warning))
       (let ((*buffer-name* buffer)
             (*buffer-start-position* position)
             (*buffer-string* string)
-            (sys::*source* (make-pathname :device "emacs-buffer" :name buffer))
+            (sys::*source* (or filename (make-pathname :device "emacs-buffer" :name buffer)))
             (sys::*source-position* position))
         (funcall (compile nil (read-from-string
                                (format nil "(~S () ~A)" 'lambda string))))
@@ -977,6 +977,7 @@
     (loop for package in (list-all-packages)
           for sym = (find-symbol (string symbol) package)
           when (and sym (equal (symbol-package sym) package))
+            
             do
                (when (sys::autoloadp symbol)
                  (sys::resolve symbol))
@@ -986,10 +987,27 @@
                  (when source  (setq sources (append sources (or (get sym 'ext::source) (get sym 'sys::source)))))
                  (when i-var (push i-var implementation-variables))
                  (when i-fun (push i-fun implementation-functions))))
-    (setq sources (remove-duplicates sources :test 'equalp))
-    (append (remove-duplicates implementation-functions :test 'equalp)
-            (mapcar (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
-            (remove-duplicates implementation-variables :test 'equalp))))
+
+    (setq sources (remove-duplicates sources :key (lambda(e) (list (first e) (second e)))
+                                     :test 'equalp))
+    (remove-repl-if-other-sources 
+     (append (remove-duplicates implementation-functions :test 'equalp)
+             (mapcar (lambda(s) (slime-location-from-source-annotation symbol s)) sources)
+             (remove-duplicates implementation-variables :test 'equalp)))))
+
+(defun remove-repl-if-other-sources (sources)
+  (loop for source in sources
+        for (nil location) = source
+        for in-repl = (and (consp location)
+                           (eq (car location) :location)
+                           (consp (second location))
+                           (eq (car (second location)) :buffer)
+                           (#"matches" (second (second location)) "[*]slime-repl.*"))
+        if in-repl
+          do (setq in-repl source)
+        else collect source into non-repl
+        finally (return (or non-repl (and in-repl (list in-repl))))))
+
 
 (defun slime-location-from-source-annotation (sym it)
   (destructuring-bind (what path pos) it
@@ -1064,6 +1082,10 @@
 ;;; case, so make its computation a user interaction.
 (defparameter *to-string-hashtable* (make-hash-table :weakness :key))
 
+;; (defimplementation find-definitions-for-emacs (name)
+;;   (print 'hi)
+;;   (funcall 'swank::find-definitions-find-symbol-
+
 (defmethod emacs-inspect ((o t))
   (let* ((type (type-of o))
          (class (ignore-errors (find-class type)))
@@ -1090,8 +1112,8 @@
        `(:line "Names java class" ,(jclass string))
        "")
    #+abcl-intro
-   (if (and (jss-p) 
-            (stringp (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t)))
+   (if (ignore-errors (and (jss-p) 
+            (stringp (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t))))
        `(:multiple
          (:label "Abbreviates java class: ")
          ,(let ((it (funcall (intern "LOOKUP-CLASS-NAME" :jss) string :return-ambiguous t :muffle-warning t)))
@@ -1235,7 +1257,7 @@
 	(intended-class (cdr (car (last (sys::inspected-parts  object))))))
     `((:label "Class: ") (:value ,(jcall "getClass" object) ,(jcall "getName" (jcall "getClass" object) )) (:newline)
       ,@(if (and intended-class (not (equal intended-class (jcall "getName" (jcall "getClass" object)))))
-	    `((:label "Intended Class: ") (:value ,(jclass intended-class) ,intended-class) (:newline)))
+	    `((:label "Intended Class: ") (:value ,intended-class ,(#"getName" (#"getClass" intended-class))) (:newline)))
       ,@(if (or (gethash object *to-string-hashtable*) (not *slime-tostring-on-demand*))
 	    (label-value-line "toString()" (funcall to-string))
 	    `((:action "[compute toString()]" ,to-string) (:newline)))
@@ -1331,38 +1353,42 @@
 
 (defun inspector-structure-slot-names-and-values (structure)
   (let ((structure-def (get (type-of structure) 'system::structure-definition )))
+    (if (not structure-def)
+        (emacs-inspect-java-object structure)
     `((:label "Slots: ") (:newline)
       ,@(loop for slotdef in (sys::dd-slots structure-def)
               for name = (sys::dsd-name slotdef)
               for reader = (sys::dsd-reader slotdef)
               for value = (eval `(,reader ,structure ))
               append
-              `("  " (:label ,(string-downcase (string name))) ": " (:value ,value) (:newline))))))
+              `("  " (:label ,(string-downcase (string name))) ": " (:value ,value) (:newline)))))))
 
 (defmethod emacs-inspect ((object sys::structure-class))
   (let* ((name (jss::get-java-field object "name" t))
          (def (get name  'system::structure-definition)))
-  `((:label "Class: ") (:value ,object) (:newline)
-    (:label "Raw defstruct definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
-    ,@(parts-for-structure-def  name)
-    ;; copy-paste from swank fancy inspector
-    ,@(when (swank-mop:specializer-direct-methods object)
-        `((:label "It is used as a direct specializer in the following methods:")
-          (:newline)
-          ,@(loop
-              for method in (specializer-direct-methods object)
-              for method-spec = (swank::method-for-inspect-value method)
-              collect "  "
-              collect `(:value ,method ,(string-downcase (string (car method-spec))))
-              collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
-              append (let ((method method))
-                       `(" " (:action "[remove]"
-                                      ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
-              collect '(:newline)
-              if (documentation method t)
-                collect "    Documentation: " and
-              collect (swank::abbrev-doc  (documentation method t)) and
-              collect '(:newline)))))
+    (if (not def)
+        (emacs-inspect-java-object object)
+        `((:label "Class: ") (:value ,object) (:newline)
+          (:label "Raw defstruct definition: ") (:value ,def  ,(let ((*print-array* nil)) (prin1-to-string def))) (:newline)
+          ,@(parts-for-structure-def  name)
+          ;; copy-paste from swank fancy inspector
+          ,@(when (swank-mop:specializer-direct-methods object)
+              `((:label "It is used as a direct specializer in the following methods:")
+                (:newline)
+                ,@(loop
+                    for method in (specializer-direct-methods object)
+                    for method-spec = (swank::method-for-inspect-value method)
+                    collect "  "
+                    collect `(:value ,method ,(string-downcase (string (car method-spec))))
+                    collect `(:value ,method ,(format nil " (~{~a~^ ~})" (cdr method-spec)))
+                    append (let ((method method))
+                             `(" " (:action "[remove]"
+                                            ,(lambda () (remove-method (swank-mop::method-generic-function method) method)))))
+                    collect '(:newline)
+                    if (documentation method t)
+                      collect "    Documentation: " and
+                    collect (swank::abbrev-doc  (documentation method t)) and
+                    collect '(:newline))))))
   ;; copy-paste from swank fancy inspector
   ))
 
